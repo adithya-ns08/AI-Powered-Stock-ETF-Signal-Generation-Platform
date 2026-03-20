@@ -1,0 +1,16 @@
+# Cache & Python Ignore
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Environment Variables
+.env
+.streamlit/secrets.toml
+
+# Persistent Model Caching & Metrics
+models/
+signal_engine/models/
+signal_outputs/
+
+# Application State Logic
+signal_state.json

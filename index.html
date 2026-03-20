@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Signal Platform — Stock & ETF Dashboard</title>
+  <meta name="description" content="AI-Powered Stock & ETF Signal Generation Platform — real-time LSTM and Random Forest trading signals with interactive charts." />
+  <link rel="stylesheet" href="styles.css" />
+  <!-- Lightweight Charts CDN -->
+  <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+<div id="app">
+
+  <!-- ══════════════════════════════════════════════
+       SIDEBAR
+  ══════════════════════════════════════════════════ -->
+  <aside id="sidebar" role="navigation" aria-label="Main navigation">
+    <div class="sidebar-logo" id="sidebar-logo" title="AI Signal Platform">AI</div>
+
+    <nav class="sidebar-nav">
+      <button class="nav-item active" data-label="Dashboard" id="nav-dashboard" aria-label="Dashboard" aria-current="page">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/>
+          <rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>
+        </svg>
+        <span>Dashboard</span>
+      </button>
+
+      <button class="nav-item" data-label="Market" id="nav-market" aria-label="Market">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>
+        </svg>
+        <span>Market</span>
+      </button>
+
+      <button class="nav-item" data-label="Backtesting" id="nav-backtest" aria-label="Backtesting">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 3H5a2 2 0 00-2 2v4m6-6h10a2 2 0 012 2v4M9 3v18m0 0h10a2 2 0 002-2v-4M9 21H5a2 2 0 01-2-2v-4m0 0h18"/>
+        </svg>
+        <span>Backtest</span>
+      </button>
+
+      <button class="nav-item" data-label="Alerts" id="nav-alerts" aria-label="Alerts">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/>
+        </svg>
+        <span>Alerts</span>
+      </button>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="avatar" id="user-avatar" title="Profile">JD</div>
+    </div>
+  </aside>
+
+  <!-- ══════════════════════════════════════════════
+       HEADER
+  ══════════════════════════════════════════════════ -->
+  <header id="header" role="banner">
+    <div class="search-bar">
+      <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+      </svg>
+      <input type="text" id="ticker-search" placeholder="Search tickers (e.g., AAPL, SPY)..." autocomplete="off" aria-label="Search tickers" />
+    </div>
+
+    <div class="header-spacer"></div>
+
+    <div class="api-status" id="api-status" title="Backend API connection status">
+      <div class="dot" id="api-dot"></div>
+      <span id="api-status-text">API Connected</span>
+    </div>
+
+    <button class="notif-btn" id="notif-btn" aria-label="Notifications">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/>
+      </svg>
+      <span class="notif-badge"></span>
+    </button>
+  </header>
+
+  <!-- ══════════════════════════════════════════════
+       MAIN CHART AREA
+  ══════════════════════════════════════════════════ -->
+  <main id="main" role="main">
+    <!-- Chart header -->
+    <div class="chart-header">
+      <div class="ticker-info">
+        <div class="ticker-name">
+          <span id="ticker-name-text">AAPL — Apple Inc.</span>
+          <div class="sentiment-badge" id="sentiment-badge">
+            <div class="sentiment-bar-wrap">
+              <div class="sentiment-indicator" id="sentiment-indicator"></div>
+            </div>
+            <span id="sentiment-label">Bullish</span>
+          </div>
+        </div>
+        <div class="ticker-price-row">
+          <span style="color:var(--neon-emerald);font-size:16px;">⊕</span>
+          <span id="ticker-price">$152.34</span>
+          <span id="ticker-change">(+2.3%)</span>
+          <span id="ticker-last-updated">Last updated: 2 min ago</span>
+        </div>
+      </div>
+
+      <div class="timeframe-group" role="group" aria-label="Timeframe selector">
+        <button class="tf-btn" id="tf-1h" data-tf="1h">1H</button>
+        <button class="tf-btn" id="tf-4h" data-tf="4h">4H</button>
+        <button class="tf-btn active" id="tf-1d" data-tf="1d">1D</button>
+        <button class="tf-btn" id="tf-1w" data-tf="1w">1W</button>
+        <button class="tf-btn" id="tf-1m" data-tf="1m">1M</button>
+      </div>
+    </div>
+
+    <!-- Chart -->
+    <div id="chart-container" role="img" aria-label="Stock price chart with AI signals">
+      <div id="lightweight-chart"></div>
+      <div class="chart-legend" id="chart-legend">
+        <div class="legend-item">
+          <div class="legend-dot" style="background:var(--neon-emerald);box-shadow:0 0 5px var(--neon-emerald);"></div>
+          <span>AI Buy Signal</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-dot" style="background:var(--neon-crimson);box-shadow:0 0 5px var(--neon-crimson);"></div>
+          <span>AI Sell Signal</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-dot" style="background:var(--neon-amber);box-shadow:0 0 5px var(--neon-amber);"></div>
+          <span>Hold Signal</span>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- ══════════════════════════════════════════════
+       RIGHT PANEL
+  ══════════════════════════════════════════════════ -->
+  <aside id="right-panel" role="complementary" aria-label="Position Sizer and Live Signals">
+
+    <!-- Position Sizer -->
+    <section id="position-sizer" aria-labelledby="sizer-title">
+      <div class="panel-section-header">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--neon-emerald)">
+          <rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
+        </svg>
+        <span class="section-title" id="sizer-title">Position Sizer</span>
+      </div>
+      <p class="section-subtitle">Risk-based trade calculator</p>
+
+      <!-- Portfolio Size -->
+      <div class="input-group">
+        <div class="input-label">Portfolio Size</div>
+        <div class="input-wrap">
+          <span class="input-prefix">$</span>
+          <input type="number" id="input-portfolio" value="100000" min="0" step="1000"
+                 aria-label="Portfolio size in dollars" placeholder="100000" />
+        </div>
+      </div>
+
+      <!-- Risk per Trade -->
+      <div class="input-group">
+        <div class="input-label">Risk per Trade (%)</div>
+        <div class="input-wrap">
+          <span class="input-prefix">%</span>
+          <input type="number" id="input-risk" value="2" min="0.1" max="100" step="0.1"
+                 aria-label="Risk per trade percentage" placeholder="2" />
+        </div>
+      </div>
+
+      <!-- Model Confidence -->
+      <div class="input-group">
+        <div class="input-label">Model Confidence (%)</div>
+        <div class="input-wrap">
+          <span class="input-prefix">↗</span>
+          <input type="number" id="input-confidence" value="85" min="1" max="100" step="1"
+                 aria-label="Model confidence percentage" placeholder="85" />
+        </div>
+      </div>
+
+      <button class="calc-btn" id="calc-btn" aria-label="Calculate recommended position size">
+        <span>⚡</span> Calculate
+      </button>
+
+      <!-- Result -->
+      <div class="result-section" id="result-section">
+        <div class="result-row">
+          <span class="result-label">Recommended Size</span>
+          <span id="recommended-size" style="font-size:16px;font-weight:700;color:var(--neon-emerald);font-family:'JetBrains Mono',monospace;">$1,700.00</span>
+        </div>
+        <div class="result-bar-wrap">
+          <div id="result-bar-fill" style="width:0.85%;height:100%;border-radius:2px;background:var(--neon-emerald);transition:width 0.5s;"></div>
+        </div>
+        <div class="result-meta">
+          <span id="result-pct-label">0.85% of portfolio</span>
+          <span id="result-max-risk">Max Risk: $2,000.00</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Live Signals Feed -->
+    <section id="signals-feed" aria-labelledby="signals-title">
+      <div class="signals-header">
+        <div>
+          <div class="panel-section-header">
+            <span class="section-title" id="signals-title">Live Signals</span>
+          </div>
+          <p class="signals-subtitle">Real-time AI predictions</p>
+        </div>
+        <span class="active-badge" id="active-count">5 Active</span>
+      </div>
+
+      <div class="signals-list" id="signals-list" role="feed" aria-label="Live trading signals">
+        <!-- Signal cards injected by app.js -->
+      </div>
+    </section>
+  </aside>
+
+  <!-- ══════════════════════════════════════════════
+       METRICS BAR
+  ══════════════════════════════════════════════════ -->
+  <footer id="metrics-bar" role="contentinfo" aria-label="Performance metrics">
+
+    <!-- Sharpe Ratio -->
+    <div class="metric-card" id="metric-card-sharpe">
+      <div class="metric-icon green">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/>
+          <line x1="6" y1="20" x2="6" y2="14"/>
+        </svg>
+      </div>
+      <div class="metric-body">
+        <div class="metric-label">Sharpe Ratio</div>
+        <div class="metric-value-row">
+          <span class="metric-value" id="metric-sharpe">1.84</span>
+          <span class="metric-delta up" id="metric-sharpe-delta">+0.12</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Max Drawdown -->
+    <div class="metric-card" id="metric-card-drawdown">
+      <div class="metric-icon red">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="22 17 13.5 8.5 8.5 13.5 2 7"/><polyline points="16 17 22 17 22 11"/>
+        </svg>
+      </div>
+      <div class="metric-body">
+        <div class="metric-label">Max Drawdown</div>
+        <div class="metric-value-row">
+          <span class="metric-value" id="metric-drawdown">-12.3%</span>
+          <span class="metric-delta up" id="metric-drawdown-delta">+2.1%</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Annualized Return -->
+    <div class="metric-card" id="metric-card-ann-return">
+      <div class="metric-icon blue">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>
+        </svg>
+      </div>
+      <div class="metric-body">
+        <div class="metric-label">Annualized Return</div>
+        <div class="metric-value-row">
+          <span class="metric-value" id="metric-ann-return">+34.7%</span>
+          <span class="metric-delta up" id="metric-ann-return-delta">+5.2%</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Live status -->
+    <div class="live-status" id="live-status">
+      <div class="live-dot"></div>
+      <span id="last-update-time">Last update: 30s ago</span>
+    </div>
+
+  </footer>
+
+</div><!-- /#app -->
+
+<script src="app.js"></script>
+</body>
+</html>
