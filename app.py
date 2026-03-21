@@ -679,11 +679,22 @@ def render_detail():
 
     st.markdown("<hr>", unsafe_allow_html=True)
 
-    # ── Fetch metadata + validate ────────────────────────────────
+    # ── Fetch metadata + validate ─────────────────────────────────────
     tick = fetch_company_metadata(ticker_select)
     if not tick["valid"]:
-        st.error(f"❌ Ticker **{ticker_select}** not found on Yahoo Finance. Please go back and try another symbol.")
-        st.stop()
+        try:
+            _info  = yf.Ticker(ticker_select).fast_info
+            _price = getattr(_info, "last_price", None) or getattr(_info, "regular_market_price", None)
+            if _price:
+                tick = {"valid": True, "name": ticker_select, "price": float(_price), "change": 0.0,
+                        "sentiment": 50, "sector": "N/A", "industry": "N/A", "marketCap": "N/A",
+                        "longBusinessSummary": "No summary available.", "fullTimeEmployees": "N/A"}
+            else:
+                st.error(f"❌ Ticker **{ticker_select}** was not found. Please check the symbol and try again.")
+                st.stop()
+        except Exception:
+            st.error(f"❌ Ticker **{ticker_select}** was not found. Please check the symbol and try again.")
+            st.stop()
 
     # ── ML Signals (moved to progressive load below) ─────────────
     SIGNALS = []
