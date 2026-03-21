@@ -7,4 +7,5 @@ yfinance
 requests
 joblib
 xgboost
-tensorflow
+matplotlib
+seaborn
