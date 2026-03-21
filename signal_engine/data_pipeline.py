@@ -103,9 +103,16 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     df["log_ret"]  = np.log(df["Close"] / df["Close"].shift(1))
 
     # ── Moving averages & deviation ──────────────────────────────
-    for w in [10, 20, 50, 100, 200]:
-        df[f"ma{w}"]    = df["Close"].rolling(w).mean()
-        df[f"dev_ma{w}"] = (df["Close"] - df[f"ma{w}"]) / df[f"ma{w}"]
+    df["ma10"]    = df["Close"].rolling(10).mean()
+    df["dev_ma10"] = (df["Close"] - df["ma10"]) / df["ma10"]
+    df["ma20"]    = df["Close"].rolling(20).mean()
+    df["dev_ma20"] = (df["Close"] - df["ma20"]) / df["ma20"]
+    df["ma50"]    = df["Close"].rolling(50).mean()
+    df["dev_ma50"] = (df["Close"] - df["ma50"]) / df["ma50"]
+    df["ma100"]   = df["Close"].rolling(100).mean()
+    df["dev_ma100"] = (df["Close"] - df["ma100"]) / df["ma100"]
+    df["ma200"]   = df["Close"].rolling(200).mean()
+    df["dev_ma200"] = (df["Close"] - df["ma200"]) / df["ma200"]
 
     # ── RSI ──────────────────────────────────────────────────────
     df["rsi_14"] = _rsi(df["Close"], 14)
@@ -188,8 +195,11 @@ def _synthetic_ohlcv(ticker: str, n: int = 500) -> pd.DataFrame:
     }, index=idx)
 
 
+import streamlit as st
+
+@st.cache_data(ttl=86400)
 def fetch_ohlcv(ticker: str,
-                period: str = "2y",
+                period: str = "5y",
                 interval: str = "1d") -> pd.DataFrame:
     """
     Download OHLCV from yfinance; falls back to synthetic data.
@@ -301,20 +311,20 @@ def build_dataset(ticker: str,
         counts = lbl.value_counts().to_dict()
         print(f"[{ticker}] Label distribution: {counts}")
 
-    # 4. Chronological 60/20/20 split (NO shuffle) ──────────────
-    n = len(feat_df)
-    n_train = int(n * train_frac)
-    n_val   = int(n * val_frac)
-
+    # 4. Chronological 60/20/20 split using train_test_split (NO shuffle)
     X_all = feat_df.values.astype(np.float32)
     y_all = lbl.values.astype(int)
     d_all = feat_df.index
 
-    X_tr, X_va, X_te = X_all[:n_train], X_all[n_train:n_train+n_val], X_all[n_train+n_val:]
-    y_tr, y_va, y_te = y_all[:n_train], y_all[n_train:n_train+n_val], y_all[n_train+n_val:]
-    d_tr = d_all[:n_train]
-    d_va = d_all[n_train:n_train+n_val]
-    d_te = d_all[n_train+n_val:]
+    # First split: train_val (80%) vs test (20%)
+    X_train_val, X_te, y_train_val, y_te, d_train_val, d_te = train_test_split(
+        X_all, y_all, d_all, test_size=0.2, shuffle=False
+    )
+    
+    # Second split: train (75% of 80% = 60%) vs val (25% of 80% = 20%)
+    X_tr, X_va, y_tr, y_va, d_tr, d_va = train_test_split(
+        X_train_val, y_train_val, d_train_val, test_size=0.25, shuffle=False
+    )
 
     # 5. Scale (fit on train only) ───────────────────────────────
     X_tr_s, X_va_s, X_te_s, scaler_std = scale_features(X_tr, X_va, X_te, "standard")

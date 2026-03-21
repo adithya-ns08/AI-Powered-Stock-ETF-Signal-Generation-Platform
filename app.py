@@ -1,21 +1,22 @@
 """
 app.py — AI-Powered Stock & ETF Signal Generation Platform
 Streamlit Dashboard  |  Run: streamlit run app.py
-Requirements: pip install streamlit plotly pandas numpy
+Requirements: pip install streamlit plotly pandas numpy yfinance
 """
 
 import streamlit as st
 import plotly.graph_objects as go
 import numpy as np
 import pandas as pd
+import yfinance as yf
 from datetime import datetime, timedelta
 
 # ── Page config — MUST be first Streamlit call ──────────────────
 st.set_page_config(
-    page_title="AI Signal Platform",
+    page_title="AI-Powered Stock & ETF Signal Generation Platform",
     page_icon="⚡",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 # ══════════════════════════════════════════════════════════════════
@@ -54,37 +55,10 @@ html, body, [class*="css"], [data-testid="stAppViewContainer"] {
 /* ── Hide Streamlit chrome ── */
 #MainMenu, footer, header, [data-testid="stToolbar"] { visibility: hidden; height: 0; }
 [data-testid="stDecoration"] { display: none; }
+[data-testid="stSidebar"] { display: none; }
 .block-container {
-  padding: 1rem 1.2rem 1rem 1.2rem !important;
+  padding: 1rem 2rem 1rem 2rem !important;
   max-width: 100% !important;
-}
-
-/* ── Sidebar ── */
-[data-testid="stSidebar"] {
-  background: var(--bg-base) !important;
-  border-right: 1px solid var(--border) !important;
-}
-[data-testid="stSidebar"] > div:first-child { padding-top: 0.5rem !important; }
-[data-testid="stSidebarNav"] { display: none; }
-
-/* Sidebar buttons — make them icon-style */
-[data-testid="stSidebar"] [data-testid="stButton"] button {
-  background: transparent !important;
-  border: 1px solid transparent !important;
-  border-radius: 10px !important;
-  color: var(--text-3) !important;
-  font-size: 11px !important;
-  font-weight: 500 !important;
-  padding: 8px 6px !important;
-  margin: 1px 0 !important;
-  transition: all 0.2s !important;
-  box-shadow: none !important;
-  width: 100% !important;
-}
-[data-testid="stSidebar"] [data-testid="stButton"] button:hover {
-  background: var(--bg-hover) !important;
-  color: var(--text-1) !important;
-  transform: none !important;
 }
 
 /* ── Number inputs ── */
@@ -118,7 +92,24 @@ html, body, [class*="css"], [data-testid="stAppViewContainer"] {
   color: var(--text-1) !important;
 }
 
-/* ── Calculate button (main action) ── */
+/* ── Text input ── */
+[data-testid="stTextInput"] input {
+  background: var(--bg-input) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 10px !important;
+  color: var(--text-1) !important;
+  font-family: 'Inter', sans-serif !important;
+  font-size: 15px !important;
+  padding: 10px 16px !important;
+}
+[data-testid="stTextInput"] input:focus {
+  border-color: var(--emerald) !important;
+  box-shadow: 0 0 0 3px rgba(0,230,118,0.12) !important;
+  outline: none !important;
+}
+[data-testid="stTextInput"] label { color: var(--text-2) !important; font-size: 12px !important; }
+
+/* ── Buttons (main action) ── */
 [data-testid="stButton"] button {
   background: linear-gradient(135deg, #00c853, #00e676) !important;
   color: #000 !important;
@@ -132,6 +123,21 @@ html, body, [class*="css"], [data-testid="stAppViewContainer"] {
 [data-testid="stButton"] button:hover {
   box-shadow: 0 0 28px rgba(0,230,118,0.45) !important;
   transform: translateY(-1px) !important;
+}
+
+/* ── Back button (secondary-ish) ── */
+.back-btn [data-testid="stButton"] button {
+  background: rgba(255,255,255,0.06) !important;
+  color: var(--text-2) !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: none !important;
+  font-weight: 500 !important;
+}
+.back-btn [data-testid="stButton"] button:hover {
+  background: var(--bg-hover) !important;
+  color: var(--text-1) !important;
+  box-shadow: none !important;
+  transform: none !important;
 }
 
 /* ── Radio (timeframe switch) ── */
@@ -171,31 +177,42 @@ hr { border-color: var(--border) !important; margin: 12px 0 !important; }
 /* ── Plotly chart bg ── */
 .js-plotly-plot { border-radius: 12px !important; }
 
-/* ── Metric pulse animation ── */
+/* ── Animations ── */
 @keyframes pulse-dot { 0%,100%{opacity:1; box-shadow: 0 0 6px var(--emerald);} 50%{opacity:.35; box-shadow: 0 0 2px var(--emerald);} }
+@keyframes fade-in { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
+@keyframes card-in { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:translateY(0)} }
 
-/* ── Active sidebar nav ── */
-.nav-active button {
-  background: rgba(0,230,118,0.1) !important;
-  color: var(--emerald) !important;
-  border-color: rgba(0,230,118,0.25) !important;
-}
+.home-wrapper { animation: fade-in 0.4s ease-out; }
+.detail-wrapper { animation: fade-in 0.35s ease-out; }
+.market-card { animation: card-in 0.4s ease-out both; }
 </style>
 """, unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════
-#  DATA (Engine Integration)
+#  SESSION STATE — ROUTER INIT
+# ══════════════════════════════════════════════════════════════════
+if "current_view" not in st.session_state:
+    st.session_state.current_view = "Home"
+if "selected_ticker" not in st.session_state:
+    st.session_state.selected_ticker = None
+
+# Legacy state keys used inside render_detail
+for k, v in [("tf", "1D")]:
+    if k not in st.session_state:
+        st.session_state[k] = v
+
+
+# ══════════════════════════════════════════════════════════════════
+#  ENGINE LOADER
 # ══════════════════════════════════════════════════════════════════
 from signal_engine.engine import SignalEngine, EngineConfig
 from pathlib import Path
 
 @st.cache_resource
 def load_engine():
-    # Safely disable LSTM/XGBoost due to missing system libs on user's machine
     config = EngineConfig(use_lstm=False, use_xgboost=False)
     engine = SignalEngine(config=config)
-    
     models_dir = Path("models")
     if not models_dir.exists() or not any(models_dir.iterdir()):
         engine._needs_training = True
@@ -206,30 +223,14 @@ def load_engine():
 
 try:
     engine = load_engine()
-    
-    if getattr(engine, "_needs_training", False):
-        with st.spinner("First run detected: Training AI models..."):
-            engine.run(["AAPL", "TSLA", "NVDA", "SPY", "MSFT"], evaluate=True, train_mode=True)
-            engine.save_models()
-        engine._needs_training = False  # Ensure subsequent partial reruns don't retrain
-        st.success("Models trained and cached! Refreshing stream...")
-        st.rerun()
-
-    # Execute zero-latency inference
-    engine.run(["AAPL", "TSLA", "NVDA", "SPY", "MSFT"], evaluate=False, train_mode=False)
-    SIGNALS = engine.get_signals_for_streamlit()
 except Exception as e:
     st.error(f"Error loading Signal Engine: {e}")
-    SIGNALS = []
+    engine = None
 
-TICKERS = {
-    "AAPL": {"name": "Apple Inc.",   "price": 152.34, "change": 2.3,  "sentiment": 72},
-    "TSLA": {"name": "Tesla Inc.",   "price": 245.67, "change": 1.8,  "sentiment": 65},
-    "NVDA": {"name": "NVIDIA Corp.", "price": 478.23, "change": -1.2, "sentiment": 35},
-    "SPY":  {"name": "S&P 500 ETF", "price": 442.15, "change": 0.4,  "sentiment": 55},
-    "MSFT": {"name": "Microsoft",    "price": 378.90, "change": 3.1,  "sentiment": 80},
-}
 
+# ══════════════════════════════════════════════════════════════════
+#  SHARED HELPERS
+# ══════════════════════════════════════════════════════════════════
 METRICS = {
     "sharpe":     {"value": "1.84",   "delta": "+0.12", "up": True},
     "drawdown":   {"value": "-12.3%", "delta": "+2.1%", "up": True},
@@ -237,20 +238,48 @@ METRICS = {
     "accuracy":   {"value": "82.4%",  "delta": "+1.5%", "up": True},
 }
 
-# ── Session state ────────────────────────────────────────────────
-for k, v in [("nav", "Dashboard"), ("tf", "1D"), ("ticker", "AAPL")]:
-    if k not in st.session_state:
-        st.session_state[k] = v
+_SIG_COLOR  = {"buy": "#00e676", "sell": "#ff1744", "hold": "#ffab00"}
+_SIG_BG     = {"buy": "rgba(0,230,118,0.12)", "sell": "rgba(255,23,68,0.12)", "hold": "rgba(255,171,0,0.12)"}
+_SIG_BORDER = {"buy": "rgba(0,230,118,0.28)", "sell": "rgba(255,23,68,0.28)", "hold": "rgba(255,171,0,0.28)"}
+_SIG_GSTART = {"buy": "#00897b", "sell": "#c62828", "hold": "#e65100"}
+_SIG_ICON   = {"buy": "↗", "sell": "↘", "hold": "→"}
 
 
-# ══════════════════════════════════════════════════════════════════
-#  PRICE SERIES (synthetic, cached)
-# ══════════════════════════════════════════════════════════════════
-@st.cache_data
+@st.cache_data(ttl=3600)
+def fetch_company_metadata(ticker: str) -> dict:
+    try:
+        t = yf.Ticker(ticker)
+        info = t.info
+        price = info.get("currentPrice", info.get("regularMarketPrice", info.get("previousClose", 0.0)))
+        if price == 0.0:
+            return {"valid": False}
+        prev_close = info.get("previousClose", info.get("regularMarketPreviousClose", price))
+        if prev_close and prev_close != 0:
+            pct_change = ((price - prev_close) / prev_close) * 100
+        else:
+            pct_change = 0.0
+        return {
+            "valid": True,
+            "name": info.get("longName", info.get("shortName", ticker)),
+            "price": price,
+            "change": round(pct_change, 2),
+            "sentiment": 50,
+            "sector": info.get("sector", "N/A"),
+            "industry": info.get("industry", "N/A"),
+            "marketCap": info.get("marketCap", "N/A"),
+            "longBusinessSummary": info.get("longBusinessSummary", "No summary available."),
+            "fullTimeEmployees": info.get("fullTimeEmployees", "N/A"),
+        }
+    except Exception:
+        return {"valid": False}
+
+
+@st.cache_data(ttl=3600)
 def get_price_series(ticker: str, tf: str) -> pd.DataFrame:
     np.random.seed(abs(hash(ticker + tf)) % (2**31))
     n     = {"1H": 60, "4H": 120, "1D": 90, "1W": 52, "1M": 24}[tf]
-    base  = TICKERS.get(ticker, TICKERS["AAPL"])["price"] * 0.97
+    tick_meta = fetch_company_metadata(ticker)
+    base  = tick_meta["price"] * 0.97 if tick_meta["valid"] else 100.0
     v     = float(base)
     prices = []
     for _ in range(n):
@@ -264,93 +293,27 @@ def get_price_series(ticker: str, tf: str) -> pd.DataFrame:
     return pd.DataFrame({"date": dates, "price": prices})
 
 
-# ══════════════════════════════════════════════════════════════════
-#  PLOTLY CHART BUILDER
-# ══════════════════════════════════════════════════════════════════
 def build_chart(ticker: str, tf: str) -> go.Figure:
     df = get_price_series(ticker, tf)
-    n  = len(df)
-    # Place markers at ~25% and 65% of the series
-    b_idx = [max(0, n // 4), max(0, n * 2 // 3)]
-    s_idx = [max(0, n * 2 // 5), max(0, n * 4 // 5)]
-
     fig = go.Figure()
-
-    # Main area line
     fig.add_trace(go.Scatter(
         x=df["date"], y=df["price"],
         mode="lines",
-        line=dict(color="#00e676", width=2.5),
-        fill="tozeroy",
-        fillcolor="rgba(0,230,118,0.06)",
+        line=dict(color="#00d09c", width=3.5), # thick bright green
         name=ticker,
-        hovertemplate="<b>%{x|%b %d %H:%M}</b><br>$%{y:.2f}<extra></extra>",
+        showlegend=False,
     ))
-
-    # Buy markers
-    valid_b = [i for i in b_idx if 0 <= i < n]
-    if valid_b:
-        fig.add_trace(go.Scatter(
-            x=df["date"].iloc[valid_b], y=df["price"].iloc[valid_b],
-            mode="markers+text",
-            marker=dict(symbol="triangle-up", size=14, color="#00e676",
-                        line=dict(color="#003a20", width=1.5)),
-            text=["▲ BUY"] * len(valid_b),
-            textposition="bottom center",
-            textfont=dict(color="#00e676", size=10, family="Inter"),
-            name="AI Buy Signal",
-        ))
-
-    # Sell markers
-    valid_s = [i for i in s_idx if 0 <= i < n]
-    if valid_s:
-        fig.add_trace(go.Scatter(
-            x=df["date"].iloc[valid_s], y=df["price"].iloc[valid_s],
-            mode="markers+text",
-            marker=dict(symbol="triangle-down", size=14, color="#ff1744",
-                        line=dict(color="#5a0010", width=1.5)),
-            text=["▼ SELL"] * len(valid_s),
-            textposition="top center",
-            textfont=dict(color="#ff1744", size=10, family="Inter"),
-            name="AI Sell Signal",
-        ))
-
     fig.update_layout(
-        plot_bgcolor  = "#13161f",
-        paper_bgcolor = "#13161f",
-        margin=dict(l=60, r=20, t=24, b=44),
-        font=dict(family="Inter,system-ui", color="#8890b0", size=11),
-        xaxis=dict(
-            gridcolor="#1f2235", showgrid=True,
-            zeroline=False, showline=False,
-            tickfont=dict(color="#555a72", size=10),
-        ),
-        yaxis=dict(
-            gridcolor="#1f2235", showgrid=True,
-            zeroline=False, showline=False,
-            tickfont=dict(color="#555a72", size=10),
-            tickprefix="$",
-        ),
-        legend=dict(
-            bgcolor="rgba(19,22,31,0.9)", bordercolor="#252840",
-            borderwidth=1, font=dict(color="#8890b0", size=10),
-            orientation="h", yanchor="bottom", y=0.02, xanchor="left", x=0.01,
-        ),
+        plot_bgcolor  = "rgba(0,0,0,0)",
+        paper_bgcolor = "rgba(0,0,0,0)",
+        margin=dict(l=0, r=0, t=10, b=0),
+        xaxis=dict(showgrid=False, zeroline=False, showticklabels=True),
+        yaxis=dict(showgrid=True, gridcolor='rgba(128, 128, 128, 0.2)', zeroline=False, showticklabels=True, side='right'),
+        showlegend=False,
         hovermode="x unified",
-        hoverlabel=dict(bgcolor="#191c28", bordercolor="#252840",
-                        font=dict(color="#e8eaf6", family="Inter")),
+        hoverlabel=dict(bgcolor="#ffffff", bordercolor="#e0e0e0", font=dict(color="#1e2029", family="Inter")),
     )
     return fig
-
-
-# ══════════════════════════════════════════════════════════════════
-#  HTML COMPONENT HELPERS
-# ══════════════════════════════════════════════════════════════════
-_SIG_COLOR  = {"buy": "#00e676", "sell": "#ff1744", "hold": "#ffab00"}
-_SIG_BG     = {"buy": "rgba(0,230,118,0.12)", "sell": "rgba(255,23,68,0.12)", "hold": "rgba(255,171,0,0.12)"}
-_SIG_BORDER = {"buy": "rgba(0,230,118,0.28)", "sell": "rgba(255,23,68,0.28)", "hold": "rgba(255,171,0,0.28)"}
-_SIG_GSTART = {"buy": "#00897b", "sell": "#c62828", "hold": "#e65100"}
-_SIG_ICON   = {"buy": "↗", "sell": "↘", "hold": "→"}
 
 
 def signal_card_html(s: dict) -> str:
@@ -362,55 +325,34 @@ def signal_card_html(s: dict) -> str:
     gs    = _SIG_GSTART[sig]
     icon  = _SIG_ICON[sig]
     pct   = s["confidence"]
-    price = f"${s['price']:.2f}"
+    price = f"₹{s['price']:.2f}"
     con_html = (
         '<span style="display:inline-flex;align-items:center;gap:3px;padding:2px 7px;'
         'background:rgba(255,255,255,0.05);border:1px solid #252840;border-radius:5px;'
         'font-size:10px;color:#555a72;">&#10003; Consensus</span>'
     ) if s["consensus"] else ""
-
     return (
         f'<div id="signal-card-{sid}" style="'
         f'background:#191c28;border:1px solid #252840;border-left:3px solid {col};'
-        f'border-radius:10px;padding:12px 13px;margin-bottom:8px;'
-        f'transition:border-color .2s;">'
-
-        # Row 1: ticker + badge + time
+        f'border-radius:10px;padding:12px 13px;margin-bottom:8px;">'
         f'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">'
         f'<div style="display:flex;align-items:center;gap:7px;">'
-        f'<span id="ticker-{sid}" style="font-size:15px;font-weight:700;'
-        f'font-family:JetBrains Mono,monospace;color:#e8eaf6;">{s["ticker"]}</span>'
-        f'<span id="signal-type-{sid}" style="display:inline-flex;align-items:center;gap:3px;'
-        f'padding:2px 8px;border-radius:5px;font-size:10px;font-weight:700;letter-spacing:.05em;'
-        f'background:{bg};color:{col};border:1px solid {bord};">{icon} {sig.upper()}</span>'
-        f'{con_html}'
-        f'</div>'
-        f'<span id="signal-time-{sid}" style="font-size:10px;color:#555a72;">{s["time"]}</span>'
-        f'</div>'
-
-        # Row 2: model + price
+        f'<span style="font-size:15px;font-weight:700;font-family:JetBrains Mono,monospace;color:#e8eaf6;">{s["ticker"]}</span>'
+        f'<span style="display:inline-flex;align-items:center;gap:3px;padding:2px 8px;border-radius:5px;'
+        f'font-size:10px;font-weight:700;letter-spacing:.05em;background:{bg};color:{col};border:1px solid {bord};">'
+        f'{icon} {sig.upper()}</span>{con_html}</div>'
+        f'<span style="font-size:10px;color:#555a72;">{s["time"]}</span></div>'
         f'<div style="display:flex;justify-content:space-between;margin-bottom:8px;">'
         f'<div><div style="font-size:10px;color:#555a72;">Model</div>'
-        f'<div id="signal-model-{sid}" style="font-size:12px;font-weight:500;color:#8890b0;">{s["model"]}</div></div>'
+        f'<div style="font-size:12px;font-weight:500;color:#8890b0;">{s["model"]}</div></div>'
         f'<div style="text-align:right"><div style="font-size:10px;color:#555a72;">Price</div>'
-        f'<div id="signal-price-{sid}" style="font-size:13px;font-weight:600;'
-        f'font-family:JetBrains Mono,monospace;color:#e8eaf6;">{price}</div></div>'
-        f'</div>'
-
-        # Row 3: confidence label + pct
+        f'<div style="font-size:13px;font-weight:600;font-family:JetBrains Mono,monospace;color:#e8eaf6;">{price}</div></div></div>'
         f'<div style="display:flex;justify-content:space-between;margin-bottom:5px;">'
         f'<span style="font-size:10px;color:#555a72;">Confidence &#9432;</span>'
-        f'<span id="signal-confidence-{sid}" style="font-size:12px;font-weight:700;'
-        f'font-family:JetBrains Mono,monospace;color:{col};">{pct}%</span>'
-        f'</div>'
-
-        # Progress bar
+        f'<span style="font-size:12px;font-weight:700;font-family:JetBrains Mono,monospace;color:{col};">{pct}%</span></div>'
         f'<div style="height:4px;background:#1f2235;border-radius:2px;overflow:hidden;">'
-        f'<div id="signal-bar-{sid}" style="height:100%;width:{pct}%;border-radius:2px;'
-        f'background:linear-gradient(90deg,{gs},{col});'
-        f'box-shadow:0 0 8px {col}55;"></div>'
-        f'</div>'
-        f'</div>'
+        f'<div style="height:100%;width:{pct}%;border-radius:2px;'
+        f'background:linear-gradient(90deg,{gs},{col});box-shadow:0 0 8px {col}55;"></div></div></div>'
     )
 
 
@@ -434,349 +376,712 @@ def metric_card_html(emoji, label, value, delta, is_up, val_id, delta_id, glow_c
 
 
 # ══════════════════════════════════════════════════════════════════
-#  SIDEBAR
+#  CURRENCY HELPER
 # ══════════════════════════════════════════════════════════════════
-NAV = [
-    ("Dashboard",   "📊"),
-    ("Market",      "📈"),
-    ("Backtesting", "🧪"),
-    ("Alerts",      "🔔"),
+US_TICKERS = {"AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA", "BRK-B", "SPY", "QQQ"}
+
+def get_currency_symbol(ticker: str) -> str:
+    """Return Rs for Indian tickers (.NS/.BO), $ for everything else."""
+    if ticker.upper().endswith(".NS") or ticker.upper().endswith(".BO"):
+        return "\u20b9"
+    return "$"
+
+
+# ══════════════════════════════════════════════════════════════════
+#  HOME PAGE VIEW
+# ══════════════════════════════════════════════════════════════════
+WATCHLIST_TICKERS = [
+    ("RELIANCE.NS", "Reliance Industries"),
+    ("TCS.NS",      "Tata Consultancy"),
+    ("HDFCBANK.NS", "HDFC Bank"),
+    ("INFY.NS",     "Infosys"),
 ]
 
-with st.sidebar:
-    # Logo
-    st.markdown(
-        '<div style="width:44px;height:44px;border-radius:11px;margin:12px auto 20px;'
-        'background:linear-gradient(135deg,#00e676,#00897b);display:flex;align-items:center;'
-        'justify-content:center;font-weight:800;font-size:15px;color:#000;'
-        'box-shadow:0 0 20px rgba(0,230,118,.4);">AI</div>',
-        unsafe_allow_html=True,
+GLOBAL_TICKERS = [
+    ("AAPL",  "Apple Inc."),
+    ("MSFT",  "Microsoft Corp."),
+    ("NVDA",  "NVIDIA Corp."),
+    ("TSLA",  "Tesla Inc."),
+]
+
+def render_home():
+    st.markdown('<div class="home-wrapper">', unsafe_allow_html=True)
+
+    # ── Platform Header ──────────────────────────────────────────
+    st.markdown("""
+    <div style="display:flex;align-items:center;justify-content:space-between;
+                padding:24px 0 8px;border-bottom:1px solid #252840;margin-bottom:28px;">
+      <div style="display:flex;align-items:center;gap:16px;">
+        <div style="width:48px;height:48px;border-radius:14px;
+                    background:linear-gradient(135deg,#00e676,#00897b);
+                    display:flex;align-items:center;justify-content:center;
+                    font-weight:800;font-size:17px;color:#000;
+                    box-shadow:0 0 24px rgba(0,230,118,.4);">AI</div>
+        <div>
+          <div style="font-size:22px;font-weight:800;color:#e8eaf6;letter-spacing:-.02em;">
+            ⚡ AI-Powered Stock & ETF Signal Generation Platform
+          </div>
+          <div style="font-size:12px;color:#555a72;margin-top:2px;">
+            Institutional-grade signals · Real-time AI · NSE / BSE
+          </div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:7px;background:rgba(0,230,118,.08);
+                  border:1px solid rgba(0,230,118,.25);border-radius:20px;padding:6px 16px;">
+        <span style="width:7px;height:7px;border-radius:50%;background:#00e676;
+                     box-shadow:0 0 6px #00e676;display:inline-block;
+                     animation:pulse-dot 2s infinite;"></span>
+        <span style="font-size:12px;font-weight:600;color:#00e676;">Live · Markets Open</span>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Search Bar ───────────────────────────────────────────────
+    st.markdown("""
+    <div style="margin-bottom:10px;">
+      <div style="font-size:13px;color:#8890b0;margin-bottom:8px;font-weight:500;">
+        🔍 Search any stock or ETF
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    search_col, btn_col = st.columns([5, 1])
+    with search_col:
+        search_input = st.text_input(
+            "Search ticker",
+            placeholder="Enter ticker symbol  (e.g. RELIANCE, TCS, AAPL, SPY)…",
+            key="home_search",
+            label_visibility="collapsed",
+        ).strip().upper()
+    with btn_col:
+        search_clicked = st.button("⚡ Search", key="home_search_btn", width='stretch')
+
+    if search_clicked and search_input:
+        clean_input = search_input.upper().strip()
+        # If user explicitly types a suffix (e.g. RELIANCE.BO, AAPL.US), trust it
+        if "." in clean_input:
+            ticker_to_search = clean_input
+        # Known top US tickers — pass through without any suffix
+        elif clean_input in US_TICKERS:
+            ticker_to_search = clean_input
+        # Everything else defaults to NSE Indian market
+        else:
+            ticker_to_search = f"{clean_input}.NS"
+        st.session_state.selected_ticker = ticker_to_search
+        st.session_state.current_view    = "Detail"
+        st.rerun()
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── Global Tech Leaders Grid ─────────────────────────────────
+    st.markdown("""
+    <div style="margin-bottom:16px;">
+      <div style="font-size:18px;font-weight:700;color:#e8eaf6;letter-spacing:-.01em;">
+        &#127760; Global Tech Leaders
+      </div>
+      <div style="font-size:12px;color:#555a72;margin-top:4px;">
+        US equities &middot; NASDAQ / NYSE &middot; Click to analyze
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    gcols = st.columns(4, gap="medium")
+    for idx, (ticker, fallback_name) in enumerate(GLOBAL_TICKERS):
+        meta = fetch_company_metadata(ticker)
+        price  = meta["price"] if meta["valid"] else 0.0
+        name   = meta["name"]  if meta["valid"] else fallback_name
+        change = meta.get("change", 0.0)
+        chg_color = "#00e676" if change >= 0 else "#ff1744"
+        chg_sign  = "+" if change >= 0 else ""
+        chg_arrow = "&#9650;" if change >= 0 else "&#9660;"
+        cur_sym   = get_currency_symbol(ticker)
+
+        with gcols[idx]:
+            st.markdown(f"""
+            <div class="market-card" style="animation-delay:{idx * 0.08}s;
+                 background:#191c28;border:1px solid #252840;border-radius:14px;
+                 padding:20px 18px 12px;margin-bottom:8px;
+                 transition:border-color .2s,box-shadow .2s;"
+                 onmouseover="this.style.borderColor='rgba(41,121,255,.4)';this.style.boxShadow='0 0 20px rgba(41,121,255,.1)'"
+                 onmouseout="this.style.borderColor='#252840';this.style.boxShadow='none'">
+              <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;">
+                <div>
+                  <div style="font-size:15px;font-weight:700;color:#e8eaf6;
+                              font-family:'JetBrains Mono',monospace;">{ticker}</div>
+                  <div style="font-size:11px;color:#555a72;margin-top:2px;
+                              white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+                              max-width:120px;">{name}</div>
+                </div>
+                <div style="background:rgba(41,121,255,.12);border:1px solid rgba(41,121,255,.25);
+                            border-radius:6px;padding:3px 8px;font-size:10px;
+                            font-weight:600;color:#2979ff;">NASDAQ</div>
+              </div>
+              <div style="font-size:26px;font-weight:800;color:#e8eaf6;
+                          font-family:'JetBrains Mono',monospace;margin-bottom:6px;">
+                {cur_sym}{price:,.2f}
+              </div>
+              <div style="font-size:12px;font-weight:600;color:{chg_color};">
+                {chg_arrow} {chg_sign}{change:.2f}%
+              </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            if st.button(f"Analyze {ticker}", key=f"gl_btn_{idx}", width='stretch'):
+                st.session_state.selected_ticker = ticker  # no .NS suffix — US ticker
+                st.session_state.current_view    = "Detail"
+                st.rerun()
+
+    # ── Market Leaders Grid (Indian Equities) ────────────────────
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("""
+    <div style="margin-bottom:16px;">
+      <div style="font-size:18px;font-weight:700;color:#e8eaf6;letter-spacing:-.01em;">
+        &#128200; Market Leaders
+      </div>
+      <div style="font-size:12px;color:#555a72;margin-top:4px;">
+        Top Indian equities &middot; NSE &middot; Click to analyze
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    cols = st.columns(4, gap="medium")
+    for idx, (ticker, fallback_name) in enumerate(WATCHLIST_TICKERS):
+        meta = fetch_company_metadata(ticker)
+        price  = meta["price"] if meta["valid"] else 0.0
+        name   = meta["name"]  if meta["valid"] else fallback_name
+        change = meta.get("change", 0.0)
+        chg_color = "#00e676" if change >= 0 else "#ff1744"
+        chg_sign  = "+" if change >= 0 else ""
+        chg_arrow = "&#9650;" if change >= 0 else "&#9660;"
+        cur_sym   = get_currency_symbol(ticker)
+
+        with cols[idx]:
+            st.markdown(f"""
+            <div class="market-card" style="animation-delay:{(idx + 4) * 0.08}s;
+                 background:#191c28;border:1px solid #252840;border-radius:14px;
+                 padding:20px 18px 12px;margin-bottom:8px;
+                 transition:border-color .2s,box-shadow .2s;"
+                 onmouseover="this.style.borderColor='rgba(0,230,118,.35)';this.style.boxShadow='0 0 20px rgba(0,230,118,.08)'"
+                 onmouseout="this.style.borderColor='#252840';this.style.boxShadow='none'">
+              <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;">
+                <div>
+                  <div style="font-size:15px;font-weight:700;color:#e8eaf6;
+                              font-family:'JetBrains Mono',monospace;">{ticker.replace('.NS','').replace('.BO','')}</div>
+                  <div style="font-size:11px;color:#555a72;margin-top:2px;
+                              white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+                              max-width:120px;">{name}</div>
+                </div>
+                <div style="background:rgba(0,230,118,.1);border:1px solid rgba(0,230,118,.2);
+                            border-radius:6px;padding:3px 8px;font-size:10px;
+                            font-weight:600;color:#00e676;">NSE</div>
+              </div>
+              <div style="font-size:26px;font-weight:800;color:#e8eaf6;
+                          font-family:'JetBrains Mono',monospace;margin-bottom:6px;">
+                {cur_sym}{price:,.2f}
+              </div>
+              <div style="font-size:12px;font-weight:600;color:{chg_color};">
+                {chg_arrow} {chg_sign}{change:.2f}%
+              </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            short = ticker.replace(".NS", "").replace(".BO", "")
+            if st.button(f"Analyze {short}", key=f"wl_btn_{idx}", width='stretch'):
+                st.session_state.selected_ticker = ticker
+                st.session_state.current_view    = "Detail"
+                st.rerun()
+
+    # ── Market Stats Footer ──────────────────────────────────────
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("""
+    <div style="border:1px solid #252840;border-radius:14px;padding:20px 24px;
+                background:#13161f;display:flex;align-items:center;gap:40px;flex-wrap:wrap;">
+      <div>
+        <div style="font-size:10px;color:#555a72;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px;">NIFTY 50</div>
+        <div style="font-size:20px;font-weight:700;color:#e8eaf6;font-family:'JetBrains Mono',monospace;">24,315.85</div>
+        <div style="font-size:11px;color:#00e676;font-weight:600;">▲ +0.34%</div>
+      </div>
+      <div style="width:1px;height:40px;background:#252840;"></div>
+      <div>
+        <div style="font-size:10px;color:#555a72;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px;">SENSEX</div>
+        <div style="font-size:20px;font-weight:700;color:#e8eaf6;font-family:'JetBrains Mono',monospace;">80,116.49</div>
+        <div style="font-size:11px;color:#00e676;font-weight:600;">▲ +0.28%</div>
+      </div>
+      <div style="width:1px;height:40px;background:#252840;"></div>
+      <div>
+        <div style="font-size:10px;color:#555a72;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px;">BANK NIFTY</div>
+        <div style="font-size:20px;font-weight:700;color:#e8eaf6;font-family:'JetBrains Mono',monospace;">52,841.30</div>
+        <div style="font-size:11px;color:#ff1744;font-weight:600;">▼ -0.11%</div>
+      </div>
+      <div style="width:1px;height:40px;background:#252840;"></div>
+      <div>
+        <div style="font-size:10px;color:#555a72;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px;">INDIA VIX</div>
+        <div style="font-size:20px;font-weight:700;color:#e8eaf6;font-family:'JetBrains Mono',monospace;">13.42</div>
+        <div style="font-size:11px;color:#ffab00;font-weight:600;">→ +0.05%</div>
+      </div>
+      <div style="margin-left:auto;font-size:11px;color:#555a72;">Last refresh: just now · Auto-refresh every 30s</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+# ══════════════════════════════════════════════════════════════════
+def create_financial_chart(data_series) -> go.Figure:
+    fig = go.Figure()
+    if data_series is None or data_series.empty:
+        return fig
+    
+    max_val = data_series.max()
+    
+    fig.add_trace(go.Bar(
+        x=data_series.index.strftime('%Y'), 
+        y=data_series.values, 
+        marker_color="#00d09c",
+        width=0.15,
+        text=[f"{(v/1e9):.1f}B" if abs(v) >= 1e8 else f"{(v/1e6):.1f}M" for v in data_series.values],
+        textposition="outside",
+        textfont=dict(color="#a0a0a0", size=11, family="Inter"),
+        cliponaxis=False
+    ))
+    fig.update_layout(
+        height=240, margin=dict(l=0, r=0, t=40, b=30),
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        xaxis=dict(showgrid=False, zeroline=False, dtick=1, linecolor="#252840", tickfont=dict(color="#a0a0a0")),
+    )
+    fig.update_yaxes(range=[0, max_val * 1.15], showticklabels=False, showgrid=False, zeroline=False)
+    return fig
+
+# ══════════════════════════════════════════════════════════════════
+#  DETAIL ANALYSIS VIEW
+# ══════════════════════════════════════════════════════════════════
+def render_detail():
+    ticker_select = st.session_state.selected_ticker or "RELIANCE.NS"
+
+    st.markdown('<div class="detail-wrapper">', unsafe_allow_html=True)
+
+    # ── Top bar: Back button + Ticker header ─────────────────────
+    top_left, top_right = st.columns([1, 5])
+    with top_left:
+        st.markdown('<div class="back-btn">', unsafe_allow_html=True)
+        if st.button("← Back to Dashboard", key="back_btn"):
+            st.session_state.current_view = "Home"
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with top_right:
+        st.markdown(
+            f'<div style="padding-top:6px;font-size:13px;color:#555a72;">'
+            f'Dashboard &nbsp;›&nbsp; <span style="color:#e8eaf6;font-weight:600;">'
+            f'{ticker_select}</span></div>',
+            unsafe_allow_html=True
+        )
+
+    st.markdown("<hr>", unsafe_allow_html=True)
+
+    # ── Fetch metadata + validate ────────────────────────────────
+    tick = fetch_company_metadata(ticker_select)
+    if not tick["valid"]:
+        st.error(f"❌ Ticker **{ticker_select}** not found on Yahoo Finance. Please go back and try another symbol.")
+        st.stop()
+
+    # ── ML Signals (moved to progressive load below) ─────────────
+    SIGNALS = []
+
+    # ── Derived display vars ─────────────────────────────────────
+    sent      = tick["sentiment"]
+    chg       = tick["change"]
+    chg_sign  = "+" if chg >= 0 else ""
+    chg_color = "#00e676" if chg >= 0 else "#ff1744"
+    sent_label, sent_color = (
+        ("Bullish", "#00e676") if sent > 60 else
+        ("Bearish", "#ff1744") if sent < 40 else
+        ("Neutral", "#ffab00")
     )
 
-    for label, emoji in NAV:
-        is_active = st.session_state.nav == label
-        bg  = "background:rgba(0,230,118,.1);border-color:rgba(0,230,118,.25);color:#00e676;" if is_active else "color:#555a72;"
+    # ══════════════════════════════════════════════════════════════
+    #  MAIN 2-column layout: [chart (7) | right panel (3)]
+    # ══════════════════════════════════════════════════════════════
+    col_main, col_right = st.columns([7, 3], gap="medium")
+
+    # ─────────────────────────────────────────────────────────────
+    #  LEFT: ticker header + chart + metrics
+    # ─────────────────────────────────────────────────────────────
+    with col_main:
+
+        t1, t2 = st.columns([1, 1])
+        with t1:
+            st.markdown(
+                f'<div style="padding:4px 0 2px;">'
+                f'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
+                f'<span style="font-size:20px;font-weight:700;color:#e8eaf6;">'
+                f'{ticker_select} — {tick["name"]}</span>'
+                f'<div style="display:inline-flex;align-items:center;gap:7px;background:#191c28;'
+                f'border:1px solid #252840;border-radius:6px;padding:4px 10px;">'
+                f'<div style="width:46px;height:4px;border-radius:2px;'
+                f'background:linear-gradient(90deg,#ff1744 0%,#ffab00 50%,#00e676 100%);position:relative;">'
+                f'<div style="position:absolute;top:-3px;left:{sent}%;transform:translateX(-50%);'
+                f'width:10px;height:10px;border-radius:50%;background:{sent_color};'
+                f'border:2px solid #191c28;box-shadow:0 0 6px {sent_color};"></div>'
+                f'</div>'
+                f'<span style="font-size:11px;font-weight:600;color:{sent_color};">'
+                f'{sent_label}</span></div></div>'
+                f'<div style="display:flex;align-items:center;gap:10px;margin-top:5px;">'
+                f'<span style="color:#00e676;font-size:14px;">⊕</span>'
+                f'<span style="font-size:20px;font-weight:700;color:#00e676;'
+                f'font-family:JetBrains Mono,monospace;">₹{tick["price"]:.2f}</span>'
+                f'<span style="font-size:13px;font-weight:600;color:{chg_color};">'
+                f'({chg_sign}{chg}%)</span>'
+                f'<span style="font-size:11px;color:#555a72;">Last updated: 2 min ago</span>'
+                f'</div></div>',
+                unsafe_allow_html=True,
+            )
+
+        with t2:
+            tf = st.radio(
+                "Timeframe",
+                ["1H", "4H", "1D", "1W", "1M"],
+                index=["1H", "4H", "1D", "1W", "1M"].index(st.session_state.tf),
+                horizontal=True,
+                key="tf_radio",
+                label_visibility="collapsed",
+            )
+            st.session_state.tf = tf
+
+        # Chart
+        fig = build_chart(ticker_select, st.session_state.tf)
+        st.plotly_chart(fig, width='stretch', config={
+            "displaylogo": False,
+            "modeBarButtonsToRemove": ["lasso2d", "select2d"],
+            "toImageButtonOptions": {"format": "png", "filename": f"{ticker_select}_signal_chart"},
+        })
+
+        # Metrics bar
+        backtest = {}
+        if engine and ticker_select in engine.models_:
+            # Retrieve metrics if the mock backtesting or true evaluation function exists
+            if hasattr(engine, "get_backtest_metrics"):
+                backtest = engine.get_backtest_metrics(ticker_select)
+        
+        real_sharpe   = backtest.get("sharpe")
+        real_drawdown = backtest.get("drawdown")
+        real_return   = backtest.get("ann_return")
+        real_acc      = backtest.get("accuracy")
+
+        m1, m2, m3, m4, m5 = st.columns(5, gap="small")
+        with m1:
+            val = f"{real_sharpe:.2f}" if real_sharpe is not None else "Calculating..."
+            st.markdown(metric_card_html(
+                "📊", "Sharpe Ratio",
+                val, "",
+                True, "metric-sharpe", "metric-sharpe-delta", "#00e676"
+            ), unsafe_allow_html=True)
+        with m2:
+            val = f"{real_drawdown:.1f}%" if real_drawdown is not None else "Calculating..."
+            dir_up = False if real_drawdown is not None and real_drawdown < 0 else True
+            st.markdown(metric_card_html(
+                "📉", "Max Drawdown",
+                val, "",
+                dir_up, "metric-drawdown", "metric-drawdown-delta", "#ff1744"
+            ), unsafe_allow_html=True)
+        with m3:
+            val = f"{real_return:.1f}%" if real_return is not None else "Calculating..."
+            dir_up = True if real_return is not None and real_return > 0 else False
+            color = "#00e676" if dir_up else "#ff1744"
+            st.markdown(metric_card_html(
+                "🚀", "Annualized Return",
+                val, "",
+                dir_up, "metric-ann-return", "metric-ann-return-delta", color
+            ), unsafe_allow_html=True)
+        with m4:
+            val = f"{real_acc:.1f}%" if real_acc is not None else "Calculating..."
+            if real_acc is not None:
+                acc_color = "#00e676" if real_acc > 75 else ("#ffab00" if real_acc >= 60 else "#ff1744")
+            else:
+                acc_color = "#8890b0"
+            st.markdown(metric_card_html(
+                "🎯", "Model Accuracy",
+                val, "",
+                True, "metric-accuracy", "metric-accuracy-delta", acc_color
+            ), unsafe_allow_html=True)
+        with m5:
+            st.markdown(
+                '<div style="background:#191c28;border:1px solid #252840;border-radius:10px;'
+                'padding:12px 16px;height:100%;display:flex;align-items:center;justify-content:center;">'
+                '<div style="display:flex;align-items:center;gap:8px;">'
+                '<span style="width:8px;height:8px;border-radius:50%;background:#00e676;'
+                'box-shadow:0 0 6px #00e676;display:inline-block;animation:pulse-dot 2s infinite;"></span>'
+                '<span style="font-size:11px;color:#555a72;">Live · 30s ago</span>'
+                '</div></div>',
+                unsafe_allow_html=True,
+            )
+
+
+
+        # ── Financials Section (Tabs Layout) ───────────────────────
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("<h3 style='margin-top:0;color:#e8eaf6;font-size:18px;margin-bottom:16px;'>Financials</h3>", unsafe_allow_html=True)
+        tab1, tab2, tab3 = st.tabs(["Revenue", "Profit", "Net Worth"])
+        
+        try:
+            tick_obj = yf.Ticker(ticker_select)
+            fin = tick_obj.financials
+            bs = tick_obj.balance_sheet
+            
+            with tab1:
+                if fin is not None and not fin.empty and "Total Revenue" in fin.index:
+                    rev = fin.loc["Total Revenue"].dropna().head(4)[::-1]
+                    st.plotly_chart(create_financial_chart(rev), width='stretch', config={"displayModeBar": False})
+                else:
+                    st.info("Revenue data not available.")
+            with tab2:
+                if fin is not None and not fin.empty and "Net Income" in fin.index:
+                    profit = fin.loc["Net Income"].dropna().head(4)[::-1]
+                    st.plotly_chart(create_financial_chart(profit), width='stretch', config={"displayModeBar": False})
+                else:
+                    st.info("Profit data not available.")
+            with tab3:
+                if bs is not None and not bs.empty:
+                    nw_key = "Stockholders Equity" if "Stockholders Equity" in bs.index else ("Total Stockholder Equity" if "Total Stockholder Equity" in bs.index else None)
+                    if nw_key:
+                        nw = bs.loc[nw_key].dropna().head(4)[::-1]
+                        st.plotly_chart(create_financial_chart(nw), width='stretch', config={"displayModeBar": False})
+                    else:
+                        st.info("Net Worth data not available.")
+                else:
+                    st.info("Net Worth data not available.")
+        except Exception:
+            st.info("Financial data not available for this ticker.")
+
+
+    # ─────────────────────────────────────────────────────────────
+    #  RIGHT: Position Sizer + Live Signals
+    # ─────────────────────────────────────────────────────────────
+    with col_right:
+
+        # ── ML Engine Execution (Progressive Load) ────────────────────
+        if engine:
+            if ticker_select not in engine.models_:
+                st.markdown("<br>", unsafe_allow_html=True)
+                with st.spinner("⚡ AI analyzing signals..."):
+                    engine.run([ticker_select], evaluate=True, train_mode=True)
+                    engine.save_models()
+                st.rerun()
+            engine.run([ticker_select], evaluate=False, train_mode=False)
+            SIGNALS = engine.get_signals_for_streamlit()
+
+        # Live Signals Feed
+        active_count = sum(1 for s in SIGNALS if s["signal"] != "hold")
         st.markdown(
-            f'<div style="display:flex;flex-direction:column;align-items:center;'
-            f'width:56px;height:54px;border-radius:10px;margin:2px auto;cursor:pointer;'
-            f'border:1px solid transparent;{bg}justify-content:center;gap:2px;'
-            f'font-size:11px;text-transform:uppercase;font-weight:500;letter-spacing:.03em;">'
-            f'<span style="font-size:20px;">{emoji}</span>{label[:5]}</div>',
+            f'<div style="background:#13161f;border:1px solid #252840;border-radius:12px;padding:16px;margin-bottom:14px;">'
+            f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px;">'
+            f'<div style="display:flex;align-items:center;gap:8px;">'
+            f'<span style="font-size:18px;">📡</span>'
+            f'<span style="font-size:14px;font-weight:600;color:#e8eaf6;">Live Signals</span>'
+            f'</div>'
+            f'<span style="background:rgba(0,230,118,.12);color:#00e676;'
+            f'border:1px solid rgba(0,230,118,.25);border-radius:12px;padding:3px 10px;'
+            f'font-size:11px;font-weight:600;">{active_count} Active</span>'
+            f'</div>'
+            f'<div style="font-size:11px;color:#555a72;margin-bottom:12px;">Real-time AI predictions</div>',
             unsafe_allow_html=True,
         )
-        if st.button(label, key=f"nav_{label}", help=label):
-            st.session_state.nav = label
-            st.rerun()
+        for s in SIGNALS:
+            st.markdown(signal_card_html(s), unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown("<br>" * 3, unsafe_allow_html=True)
-    st.markdown(
-        '<div style="width:38px;height:38px;border-radius:50%;margin:0 auto;'
-        'background:linear-gradient(135deg,#00897b,#2979ff);display:flex;'
-        'align-items:center;justify-content:center;font-weight:700;font-size:13px;color:#fff;'
-        'border:2px solid #353860;">JD</div>',
-        unsafe_allow_html=True,
-    )
-
-
-# ══════════════════════════════════════════════════════════════════
-#  HEADER
-# ══════════════════════════════════════════════════════════════════
-h_left, h_mid, h_right = st.columns([2, 3, 2])
-
-with h_left:
-    ticker_select = st.selectbox(
-        "Ticker",
-        list(TICKERS.keys()),
-        index=list(TICKERS.keys()).index(st.session_state.ticker),
-        key="ticker_box",
-        label_visibility="collapsed",
-    )
-    st.session_state.ticker = ticker_select
-
-with h_mid:
-    st.markdown(
-        '<div style="background:#11131a;border:1px solid #252840;border-radius:8px;'
-        'padding:7px 14px 7px 12px;display:flex;align-items:center;gap:8px;color:#555a72;">'
-        '<span style="font-size:13px;">🔍</span>'
-        '<span style="font-size:12px;">Search tickers (e.g., AAPL, SPY)…</span>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
-
-with h_right:
-    st.markdown(
-        '<div style="display:flex;align-items:center;justify-content:flex-end;gap:10px;padding-top:4px;">'
-        '<div style="display:flex;align-items:center;gap:7px;background:rgba(0,230,118,.08);'
-        'border:1px solid rgba(0,230,118,.25);border-radius:20px;padding:5px 14px;">'
-        '<span style="width:7px;height:7px;border-radius:50%;background:#00e676;'
-        'box-shadow:0 0 6px #00e676;display:inline-block;animation:pulse-dot 2s infinite;"></span>'
-        '<span id="api-status-text" style="font-size:12px;font-weight:600;color:#00e676;">API Connected</span>'
-        '</div>'
-        '<span style="font-size:20px;color:#555a72;cursor:pointer;position:relative;" title="Notifications">'
-        '🔔<span style="position:absolute;top:-2px;right:-2px;width:7px;height:7px;'
-        'background:#ff1744;border-radius:50%;border:2px solid #0d0f14;display:block;"></span>'
-        '</span>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
-
-st.markdown('<div style="height:10px;"></div>', unsafe_allow_html=True)
-
-# ══════════════════════════════════════════════════════════════════
-#  MAIN 3-column layout: [chart (7) | right panel (3)]
-# ══════════════════════════════════════════════════════════════════
-tick      = TICKERS[ticker_select]
-sent      = tick["sentiment"]
-chg       = tick["change"]
-chg_sign  = "+" if chg >= 0 else ""
-chg_color = "#00e676" if chg >= 0 else "#ff1744"
-sent_label, sent_color = (
-    ("Bullish", "#00e676") if sent > 60 else
-    ("Bearish", "#ff1744") if sent < 40 else
-    ("Neutral", "#ffab00")
-)
-
-col_main, col_right = st.columns([7, 3], gap="medium")
-
-# ─────────────────────────────────────────────────────────────────
-#  LEFT: ticker + chart + metrics
-# ─────────────────────────────────────────────────────────────────
-with col_main:
-
-    # ── Ticker header ────────────────────────────────────────────
-    t1, t2 = st.columns([1, 1])
-    with t1:
+        # Position Sizer
         st.markdown(
-            f'<div style="padding:4px 0 2px;">'
-            f'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
-            f'<span id="ticker-name-text" style="font-size:20px;font-weight:700;color:#e8eaf6;">'
-            f'{ticker_select} — {tick["name"]}</span>'
-            f'<div style="display:inline-flex;align-items:center;gap:7px;background:#191c28;'
-            f'border:1px solid #252840;border-radius:6px;padding:4px 10px;">'
-            f'<div style="width:46px;height:4px;border-radius:2px;'
-            f'background:linear-gradient(90deg,#ff1744 0%,#ffab00 50%,#00e676 100%);position:relative;">'
-            f'<div style="position:absolute;top:-3px;left:{sent}%;transform:translateX(-50%);'
-            f'width:10px;height:10px;border-radius:50%;background:{sent_color};'
-            f'border:2px solid #191c28;box-shadow:0 0 6px {sent_color};"></div>'
+            '<div style="background:#13161f;border:1px solid #252840;border-radius:12px;padding:16px;margin-bottom:14px;">'
+            '<div style="display:flex;align-items:center;gap:8px;margin-bottom:2px;">'
+            '<span style="font-size:18px;">📐</span>'
+            '<span style="font-size:14px;font-weight:600;color:#e8eaf6;">Position Sizer</span>'
+            '</div>'
+            '<div style="font-size:11px;color:#555a72;margin-bottom:14px;">Risk-based trade calculator</div>',
+            unsafe_allow_html=True,
+        )
+
+        portfolio = st.number_input(
+            "Portfolio Size (₹)",
+            min_value=1_000, max_value=100_000_000,
+            value=100_000, step=5_000,
+            key="portfolio_size",
+        )
+        risk_pct = st.number_input(
+            "Risk per Trade (%)",
+            min_value=0.1, max_value=25.0,
+            value=2.0, step=0.1, format="%.1f",
+            key="risk_pct",
+        )
+        confidence = st.slider(
+            "Model Confidence (%)",
+            min_value=1, max_value=100, value=85,
+            key="model_conf",
+        )
+
+        max_risk      = portfolio * (risk_pct / 100)
+        position_size = max_risk * (confidence / 100)
+        pct_of_port   = (position_size / portfolio * 100) if portfolio else 0
+        bar_w         = min(pct_of_port * 10, 100)
+
+        if st.button("⚡  Calculate Position", key="calc_btn"):
+            pass  # reactive
+
+        st.markdown(
+            f'<div style="background:#0f111a;border:1px solid #252840;border-radius:10px;'
+            f'padding:14px;margin-top:12px;">'
+            f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">'
+            f'<span style="font-size:11px;color:#8890b0;font-weight:500;">Recommended Size</span>'
+            f'<span style="font-size:20px;font-weight:700;color:#00e676;'
+            f'font-family:JetBrains Mono,monospace;">₹{position_size:,.2f}</span>'
             f'</div>'
-            f'<span id="sentiment-label" style="font-size:11px;font-weight:600;color:{sent_color};">'
-            f'{sent_label}</span>'
-            f'</div></div>'
-            f'<div style="display:flex;align-items:center;gap:10px;margin-top:5px;">'
-            f'<span style="color:#00e676;font-size:14px;">⊕</span>'
-            f'<span id="ticker-price" style="font-size:20px;font-weight:700;color:#00e676;'
-            f'font-family:JetBrains Mono,monospace;">${tick["price"]:.2f}</span>'
-            f'<span id="ticker-change" style="font-size:13px;font-weight:600;color:{chg_color};">'
-            f'({chg_sign}{chg}%)</span>'
-            f'<span id="ticker-last-updated" style="font-size:11px;color:#555a72;">Last updated: 2 min ago</span>'
+            f'<div style="height:4px;background:#1f2235;border-radius:2px;margin-bottom:8px;">'
+            f'<div style="height:100%;width:{bar_w:.1f}%;background:#00e676;'
+            f'border-radius:2px;transition:width .4s;box-shadow:0 0 6px rgba(0,230,118,.4);"></div>'
+            f'</div>'
+            f'<div style="display:flex;justify-content:space-between;font-size:10px;color:#555a72;">'
+            f'<span>{pct_of_port:.2f}% of portfolio</span>'
+            f'<span>Max Risk: ₹{max_risk:,.2f}</span>'
             f'</div></div>',
             unsafe_allow_html=True,
         )
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    with t2:
-        # Timeframe selector
-        tf = st.radio(
-            "Timeframe",
-            ["1H", "4H", "1D", "1W", "1M"],
-            index=["1H", "4H", "1D", "1W", "1M"].index(st.session_state.tf),
-            horizontal=True,
-            key="tf_radio",
-            label_visibility="collapsed",
-        )
-        st.session_state.tf = tf
-
-    # ── Chart ────────────────────────────────────────────────────
-    fig = build_chart(ticker_select, st.session_state.tf)
-    st.plotly_chart(fig, width="stretch", config={
-        "displaylogo": False,
-        "modeBarButtonsToRemove": ["lasso2d", "select2d"],
-        "toImageButtonOptions": {"format": "png", "filename": f"{ticker_select}_signal_chart"},
-    })
-
-    # ── Metrics bar ──────────────────────────────────────────────
-    m1, m2, m3, m4, m5 = st.columns(5, gap="small")
-    with m1:
-        st.markdown(metric_card_html(
-            "📊", "Sharpe Ratio",
-            METRICS["sharpe"]["value"], METRICS["sharpe"]["delta"],
-            METRICS["sharpe"]["up"], "metric-sharpe", "metric-sharpe-delta", "#00e676"
-        ), unsafe_allow_html=True)
-    with m2:
-        st.markdown(metric_card_html(
-            "📉", "Max Drawdown",
-            METRICS["drawdown"]["value"], METRICS["drawdown"]["delta"],
-            METRICS["drawdown"]["up"], "metric-drawdown", "metric-drawdown-delta", "#ff1744"
-        ), unsafe_allow_html=True)
-    with m3:
-        st.markdown(metric_card_html(
-            "🚀", "Annualized Return",
-            METRICS["ann_return"]["value"], METRICS["ann_return"]["delta"],
-            METRICS["ann_return"]["up"], "metric-ann-return", "metric-ann-return-delta", "#2979ff"
-        ), unsafe_allow_html=True)
-    with m4:
-        acc_str = METRICS["accuracy"]["value"]
+    # ══════════════════════════════════════════════════════════════
+    #  DIAGNOSTICS EXPANDER
+    # ══════════════════════════════════════════════════════════════
+    st.markdown("<br>", unsafe_allow_html=True)
+    with st.expander("Model Performance Diagnostics", expanded=False):
         try:
-            acc_val = float(acc_str.strip('%'))
-        except:
-            acc_val = 0.0
-        
-        if acc_val > 75:
-            acc_color = "#00e676"  # Green
-        elif acc_val >= 60:
-            acc_color = "#ffab00"  # Yellow
-        else:
-            acc_color = "#ff1744"  # Red
+            if not engine or ticker_select not in engine.datasets_ or ticker_select not in engine.models_:
+                st.warning("Not enough historical test data to generate confidence metrics for this ticker.")
+            else:
+                ds = engine.datasets_[ticker_select]
+                trained = engine.models_[ticker_select]
+                
+                if "Random Forest" not in trained or len(ds.get("X_test", [])) == 0:
+                    st.warning("Not enough historical test data to generate confidence metrics for this ticker.")
+                else:
+                    model = trained["Random Forest"]
+                    X_te = ds["X_test"]
+                    y_te = ds["y_test"]
+                    
+                    y_prob = model.predict_proba(X_te)
+                    y_pred = np.argmax(y_prob, axis=1)
+                    
+                    from sklearn.metrics import confusion_matrix, classification_report
+                    cm = confusion_matrix(y_te, y_pred)
+                    
+                    if cm.shape == (3, 3):
+                        tp = cm[1, 1]
+                        fp = cm[0, 1] + cm[2, 1]
+                        tn = cm[0, 0] + cm[2, 2] + cm[0, 2] + cm[2, 0]
+                    elif cm.shape == (2, 2):
+                        tn, fp, fn, tp = cm.ravel()
+                    else:
+                        tp = fp = tn = "N/A"
+                        
+                    st.markdown(
+                        f'<div style="color:#e8eaf6; font-size:16px; font-weight:600; margin-bottom:10px;">'
+                        f'Confusion Matrix (Test Set: {len(y_te)} Data Points)</div>',
+                        unsafe_allow_html=True
+                    )
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("True Positives (Correct Buys)", str(tp))
+                    c2.metric("False Positives (Bad Buys)", str(fp))
+                    c3.metric("True Negatives (Correct Holds/Sells)", str(tn))
 
-        st.markdown(metric_card_html(
-            "🎯", "Model Accuracy",
-            acc_str, METRICS["accuracy"]["delta"],
-            METRICS["accuracy"]["up"], "metric-accuracy", "metric-accuracy-delta", acc_color
-        ), unsafe_allow_html=True)
-    with m5:
+                    st.markdown("<hr style='margin: 15px 0; border-color: #252840;'>", unsafe_allow_html=True)
+                    st.markdown(
+                        '<div style="color:#e8eaf6; font-size:16px; font-weight:600; margin-bottom:10px;">'
+                        'Classification Report</div>',
+                        unsafe_allow_html=True
+                    )
+                    
+                    report_dict = classification_report(y_te, y_pred, output_dict=True, zero_division=0)
+                    
+                    # Target mapping if available in engine, usually 0=HOLD, 1=BUY, 2=SELL
+                    class_names = { "0": "HOLD", "1": "BUY", "2": "SELL" }
+                    
+                    rows = []
+                    for k, v in report_dict.items():
+                        if k in ["accuracy", "macro avg", "weighted avg"]:
+                            continue
+                        name = class_names.get(k, k)
+                        rows.append({
+                            "Signal Type": name,
+                            "F1-Score": f"{v['f1-score']:.2f}",
+                            "Precision": f"{v['precision']:.2f}",
+                            "Recall": f"{v['recall']:.2f}",
+                            "Support": str(int(v['support']))
+                        })
+                        
+                    # Add accuracy row
+                    acc = report_dict.get("accuracy", 0)
+                    rows.append({
+                        "Signal Type": "Accuracy (Hit Ratio)",
+                        "F1-Score": f"{acc:.2f}",
+                        "Precision": "-",
+                        "Recall": "-",
+                        "Support": str(len(y_te))
+                    })
+                    
+                    report_df = pd.DataFrame(rows)
+                    st.dataframe(report_df, width='stretch', hide_index=True)
+                    
+        except Exception as e:
+            st.warning("Not enough historical test data to generate confidence metrics for this ticker.")
+
+    # ══════════════════════════════════════════════════════════════
+    #  COMPANY PROFILE EXPANDER
+    # ══════════════════════════════════════════════════════════════
+    st.markdown("<br>", unsafe_allow_html=True)
+    with st.expander("Company Profile", expanded=False):
         st.markdown(
-            '<div style="background:#191c28;border:1px solid #252840;border-radius:10px;'
-            'padding:12px 16px;height:100%;display:flex;align-items:center;justify-content:center;">'
-            '<div style="display:flex;align-items:center;gap:8px;">'
-            '<span style="width:8px;height:8px;border-radius:50%;background:#00e676;'
-            'box-shadow:0 0 6px #00e676;display:inline-block;'
-            'animation:pulse-dot 2s infinite;"></span>'
-            '<span id="last-update-time" style="font-size:11px;color:#555a72;">Live · 30s ago</span>'
-            '</div></div>',
-            unsafe_allow_html=True,
+            f'<div style="color:#e8eaf6; font-size:18px; font-weight:700; margin-bottom:10px;">'
+            f'{tick.get("name", ticker_select)}</div>',
+            unsafe_allow_html=True
         )
+        st.markdown(
+            f'<div style="color:#8890b0; font-size:13px; line-height:1.6;">'
+            f'{tick.get("longBusinessSummary", "No summary available.")}</div>',
+            unsafe_allow_html=True
+        )
+        st.markdown("<hr style='margin: 15px 0; border-color: #252840;'>", unsafe_allow_html=True)
 
+        mcap = tick.get("marketCap", "N/A")
+        if isinstance(mcap, (int, float)):
+            if mcap >= 1e12:
+                mcap_str = f"₹{mcap/1e12:.2f}T"
+            elif mcap >= 1e9:
+                mcap_str = f"₹{mcap/1e9:.2f}B"
+            elif mcap >= 1e6:
+                mcap_str = f"₹{mcap/1e6:.2f}M"
+            else:
+                mcap_str = f"₹{mcap:,.0f}"
+        else:
+            mcap_str = str(mcap)
 
-# ─────────────────────────────────────────────────────────────────
-#  RIGHT: Position Sizer + Live Signals
-# ─────────────────────────────────────────────────────────────────
-with col_right:
+        p1, p2, p3, p4 = st.columns(4)
+        p1.metric("Sector",    tick.get("sector", "N/A"))
+        p2.metric("Industry",  tick.get("industry", "N/A"))
+        p3.metric("Market Cap", mcap_str)
+        p4.metric("Employees", tick.get("fullTimeEmployees", "N/A"))
 
-    # ╔══════════════════════════════════╗
-    #  POSITION SIZER
-    # ╚══════════════════════════════════╝
-    st.markdown(
-        '<div style="background:#13161f;border:1px solid #252840;border-radius:12px;padding:16px;margin-bottom:14px;">'
-        '<div style="display:flex;align-items:center;gap:8px;margin-bottom:2px;">'
-        '<span style="font-size:18px;">📐</span>'
-        '<span style="font-size:14px;font-weight:600;color:#e8eaf6;">Position Sizer</span>'
-        '</div>'
-        '<div style="font-size:11px;color:#555a72;margin-bottom:14px;">Risk-based trade calculator</div>',
-        unsafe_allow_html=True,
-    )
+    # ══════════════════════════════════════════════════════════════
+    #  ALERTING SYSTEM
+    # ══════════════════════════════════════════════════════════════
+    from signal_engine.notifier import SlackNotifier
+    notifier = SlackNotifier()
+    notifier.process_new_signals(SIGNALS)
 
-    portfolio = st.number_input(
-        "Portfolio Size ($)",
-        min_value=1_000, max_value=100_000_000,
-        value=100_000, step=5_000,
-        key="portfolio_size",
-    )
-    risk_pct = st.number_input(
-        "Risk per Trade (%)",
-        min_value=0.1, max_value=25.0,
-        value=2.0, step=0.1, format="%.1f",
-        key="risk_pct",
-    )
-    confidence = st.slider(
-        "Model Confidence (%)",
-        min_value=1, max_value=100, value=85,
-        key="model_conf",
-    )
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    # ── Live calculation ─────────────────────────────────────────
-    max_risk      = portfolio * (risk_pct / 100)
-    position_size = max_risk * (confidence / 100)
-    pct_of_port   = (position_size / portfolio * 100) if portfolio else 0
-    bar_w         = min(pct_of_port * 10, 100)
-
-    if st.button("⚡  Calculate Position", key="calc_btn"):
-        pass  # reactive — reruns automatically
-
-    st.markdown(
-        f'<div style="background:#0f111a;border:1px solid #252840;border-radius:10px;'
-        f'padding:14px;margin-top:12px;">'
-        f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">'
-        f'<span style="font-size:11px;color:#8890b0;font-weight:500;">Recommended Size</span>'
-        f'<span id="recommended-size" style="font-size:20px;font-weight:700;color:#00e676;'
-        f'font-family:JetBrains Mono,monospace;">${position_size:,.2f}</span>'
-        f'</div>'
-        f'<div style="height:4px;background:#1f2235;border-radius:2px;margin-bottom:8px;">'
-        f'<div id="result-bar-fill" style="height:100%;width:{bar_w:.1f}%;background:#00e676;'
-        f'border-radius:2px;transition:width .4s;box-shadow:0 0 6px rgba(0,230,118,.4);"></div>'
-        f'</div>'
-        f'<div style="display:flex;justify-content:space-between;font-size:10px;color:#555a72;">'
-        f'<span id="result-pct-label">{pct_of_port:.2f}% of portfolio</span>'
-        f'<span id="result-max-risk">Max Risk: ${max_risk:,.2f}</span>'
-        f'</div></div>',
-        unsafe_allow_html=True,
-    )
-
-    st.markdown('</div>', unsafe_allow_html=True)  # close sizer box
-
-    # ╔══════════════════════════════════╗
-    #  LIVE SIGNALS FEED
-    # ╚══════════════════════════════════╝
-    active_count = sum(1 for s in SIGNALS if s["signal"] != "hold")
-
-    st.markdown(
-        f'<div style="background:#13161f;border:1px solid #252840;border-radius:12px;padding:16px;">'
-        f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px;">'
-        f'<div style="display:flex;align-items:center;gap:8px;">'
-        f'<span style="font-size:18px;">📡</span>'
-        f'<span id="signals-title" style="font-size:14px;font-weight:600;color:#e8eaf6;">Live Signals</span>'
-        f'</div>'
-        f'<span id="active-count" style="background:rgba(0,230,118,.12);color:#00e676;'
-        f'border:1px solid rgba(0,230,118,.25);border-radius:12px;padding:3px 10px;'
-        f'font-size:11px;font-weight:600;">{active_count} Active</span>'
-        f'</div>'
-        f'<div style="font-size:11px;color:#555a72;margin-bottom:12px;">Real-time AI predictions</div>',
-        unsafe_allow_html=True,
-    )
-
-    for s in SIGNALS:
-        st.markdown(signal_card_html(s), unsafe_allow_html=True)
-
-    st.markdown('</div>', unsafe_allow_html=True)  # close signals box
 
 # ══════════════════════════════════════════════════════════════════
-#  DIAGNOSTICS EXPANDER
+#  MAIN ROUTER
 # ══════════════════════════════════════════════════════════════════
-st.markdown("<br>", unsafe_allow_html=True)
-
-with st.expander("Model Performance Diagnostics", expanded=False):
-    st.markdown(
-        '<div style="color:#e8eaf6; font-size:16px; font-weight:600; margin-bottom:10px;">'
-        'Confusion Matrix (Last 100 Data Points)</div>', 
-        unsafe_allow_html=True
-    )
-    
-    # Synthetic Confusion Matrix Data matching prompt
-    c1, c2, c3 = st.columns(3)
-    c1.metric("True Positives (Correct Buys)", "28")
-    c2.metric("False Positives (Bad Buys)", "4")
-    c3.metric("True Negatives (Correct Holds/Sells)", "62")
-    
-    st.markdown("<hr style='margin: 15px 0; border-color: #252840;'>", unsafe_allow_html=True)
-    st.markdown(
-        '<div style="color:#e8eaf6; font-size:16px; font-weight:600; margin-bottom:10px;">'
-        'Classification Report</div>', 
-        unsafe_allow_html=True
-    )
-    
-    # Synthetic Classification Report DataFrame
-    report_data = {
-        "Signal Type": ["BUY", "HOLD", "SELL", "Accuracy (Hit Ratio)"],
-        "F1-Score": ["0.85", "0.84", "0.79", "0.82"],
-        "Precision": ["0.88", "0.82", "0.81", "-"],
-        "Recall": ["0.82", "0.86", "0.78", "-"],
-        "Support": ["34", "45", "21", "100"]
-    }
-    # Create stylized dataframe using st.dataframe
-    st.dataframe(pd.DataFrame(report_data), width="stretch", hide_index=True)
-
-# ══════════════════════════════════════════════════════════════════
-#  REAL-TIME ALERTING SYSTEM (Milestone 3)
-# ══════════════════════════════════════════════════════════════════
-from signal_engine.notifier import SlackNotifier
-
-notifier = SlackNotifier()
-notifier.process_new_signals(SIGNALS)
+if st.session_state.current_view == "Home":
+    render_home()
+else:
+    render_detail()

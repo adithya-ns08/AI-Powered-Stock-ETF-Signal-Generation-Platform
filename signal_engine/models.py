@@ -75,8 +75,8 @@ class RandomForestSignalModel(_BaseModel):
     """
 
     def __init__(self,
-                 n_estimators: int = 400,
-                 max_depth: int = 12,
+                 n_estimators: int = 30,
+                 max_depth: int = 10,
                  min_samples_leaf: int = 5,
                  n_jobs: int = -1,
                  random_state: int = 42):
@@ -87,19 +87,14 @@ class RandomForestSignalModel(_BaseModel):
             class_weight    = "balanced",
             n_jobs          = n_jobs,
             random_state    = random_state,
-            oob_score       = True,
         )
-        # Isotonic calibration wraps the RF for better P(class) estimates
-        self._model = CalibratedClassifierCV(self._rf, method="isotonic", cv=3)
+        self._model = self._rf
         self.classes_ = None
         self.is_fitted = False
 
     def fit(self, X_train, y_train, X_val=None, y_val=None):
         print("[RandomForest] Training …")
         self._model.fit(X_train, y_train)
-        # OOB score is on the inner RF before calibration wrapping
-        self._rf.fit(X_train, y_train)
-        print(f"[RandomForest] OOB accuracy: {self._rf.oob_score_:.4f}")
         self.classes_  = self._rf.classes_
         self.is_fitted = True
         return self
