@@ -134,9 +134,21 @@ import streamlit as st
 def fetch_ohlcv(ticker: str, period: str = "5y", interval: str = "1d") -> pd.DataFrame:
     if YFINANCE_AVAILABLE:
         try:
-            raw = yf.download(ticker, period=period, interval=interval,
-                              progress=False, auto_adjust=True)
-            if raw.empty:
+            import requests as _req
+            sess = _req.Session()
+            sess.headers.update({
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/122.0.0.0 Safari/537.36"
+                )
+            })
+            raw = yf.download(
+                ticker, period=period, interval=interval,
+                progress=False, auto_adjust=True,
+                session=sess,
+            )
+            if raw is None or raw.empty:
                 raise ValueError("Empty response")
             raw.columns = [c[0] if isinstance(c, tuple) else c for c in raw.columns]
             return raw[["Open","High","Low","Close","Volume"]].dropna()

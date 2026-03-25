@@ -247,48 +247,149 @@ _SIG_GSTART = {"buy": "#00897b", "sell": "#c62828", "hold": "#e65100"}
 _SIG_ICON   = {"buy": "↗", "sell": "↘", "hold": "→"}
 
 
+def _make_yf_session() -> "requests.Session":
+    """Return a requests Session with a browser User-Agent to bypass cloud IP blocks."""
+    import requests
+    s = requests.Session()
+    s.headers.update({
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/122.0.0.0 Safari/537.36"
+        )
+    })
+    return s
+
+
 @st.cache_data(ttl=3600)
 def fetch_company_metadata(ticker: str) -> dict:
+    """
+    Fetch latest price and metadata using yf.download() which is more
+    reliable than yf.Ticker().info in cloud/server environments.
+    Falls back to yf.Ticker().fast_info as a secondary attempt.
+    Returns {"valid": False} if no data is available — never returns 0.0.
+    """
+    import time
+    import requests
+
+    # ── Primary: yf.download for latest OHLCV ────────────────────
     try:
-        t = yf.Ticker(ticker)
-        info = t.info
-        price = info.get("currentPrice", info.get("regularMarketPrice", info.get("previousClose", 0.0)))
-        if price == 0.0:
-            return {"valid": False}
-        prev_close = info.get("previousClose", info.get("regularMarketPreviousClose", price))
-        if prev_close and prev_close != 0:
-            pct_change = ((price - prev_close) / prev_close) * 100
-        else:
-            pct_change = 0.0
-        return {
-            "valid": True,
-            "name": info.get("longName", info.get("shortName", ticker)),
-            "price": price,
-            "change": round(pct_change, 2),
-            "sentiment": 50,
-            "sector": info.get("sector", "N/A"),
-            "industry": info.get("industry", "N/A"),
-            "marketCap": info.get("marketCap", "N/A"),
-            "longBusinessSummary": info.get("longBusinessSummary", "No summary available."),
-            "fullTimeEmployees": info.get("fullTimeEmployees", "N/A"),
-        }
+        sess = _make_yf_session()
+        raw = yf.download(
+            ticker, period="5d", interval="1d",
+            progress=False, auto_adjust=True,
+            session=sess,
+        )
+        if raw is not None and not raw.empty:
+            # Flatten MultiIndex columns if present
+            raw.columns = [c[0] if isinstance(c, tuple) else c for c in raw.columns]
+            close_col = next((c for c in raw.columns if c.lower() == "close"), None)
+            if close_col and len(raw) >= 1:
+                latest_close = float(raw[close_col].iloc[-1])
+                prev_close   = float(raw[close_col].iloc[-2]) if len(raw) >= 2 else latest_close
+                pct_change   = ((latest_close - prev_close) / prev_close * 100) if prev_close else 0.0
+
+                # Try to get a display name via Ticker (non-blocking fallback)
+                name = ticker
+                sector = "N/A"
+                industry = "N/A"
+                market_cap = "N/A"
+                summary = "No summary available."
+                employees = "N/A"
+                try:
+                    t = yf.Ticker(ticker, session=sess)
+                    info = t.fast_info
+                    name = getattr(info, "display_name", None) or ticker
+                except Exception:
+                    pass
+
+                return {
+                    "valid": True,
+                    "name": name,
+                    "price": round(latest_close, 2),
+                    "change": round(pct_change, 2),
+                    "sentiment": 50,
+                    "sector": sector,
+                    "industry": industry,
+                    "marketCap": market_cap,
+                    "longBusinessSummary": summary,
+                    "fullTimeEmployees": employees,
+                }
     except Exception:
-        return {"valid": False}
+        pass
+
+    # ── Secondary: fast_info fallback ────────────────────────────
+    time.sleep(0.3)  # small delay to avoid rate-limiting
+    try:
+        sess = _make_yf_session()
+        t = yf.Ticker(ticker, session=sess)
+        fi = t.fast_info
+        price = getattr(fi, "last_price", None) or getattr(fi, "regular_market_price", None)
+        if price and float(price) > 0:
+            prev = getattr(fi, "previous_close", price)
+            pct  = ((float(price) - float(prev)) / float(prev) * 100) if prev else 0.0
+            return {
+                "valid": True,
+                "name": ticker,
+                "price": round(float(price), 2),
+                "change": round(pct, 2),
+                "sentiment": 50,
+                "sector": "N/A",
+                "industry": "N/A",
+                "marketCap": "N/A",
+                "longBusinessSummary": "No summary available.",
+                "fullTimeEmployees": "N/A",
+            }
+    except Exception:
+        pass
+
+    return {"valid": False}
 
 
-@st.cache_data(ttl=3600)
-def get_price_series(ticker: str, tf: str) -> pd.DataFrame:
-    np.random.seed(abs(hash(ticker + tf)) % (2**31))
-    n     = {"1H": 60, "4H": 120, "1D": 90, "1W": 52, "1M": 24}[tf]
+@st.cache_data(ttl=1800)
+def get_price_series(ticker: str, tf: str) -> pd.DataFrame | None:
+    """
+    Fetch real OHLCV data from yfinance for the chosen timeframe.
+    Falls back to synthetic data if cloud fetch fails.
+    Returns None only when ticker is completely invalid.
+    """
+    import requests as _requests
+    period_map   = {"1H": "5d",  "4H": "60d", "1D": "6mo", "1W": "2y",  "1M": "5y"}
+    interval_map = {"1H": "15m", "4H": "1h",  "1D": "1d",  "1W": "1wk", "1M": "1mo"}
+
+    try:
+        sess = _make_yf_session()
+        raw = yf.download(
+            ticker,
+            period   = period_map[tf],
+            interval = interval_map[tf],
+            progress = False,
+            auto_adjust = True,
+            session  = sess,
+        )
+        if raw is not None and not raw.empty:
+            raw.columns = [c[0] if isinstance(c, tuple) else c for c in raw.columns]
+            close_col = next((c for c in raw.columns if c.lower() == "close"), None)
+            if close_col:
+                prices = raw[close_col].dropna()
+                return pd.DataFrame({"date": prices.index, "price": prices.values})
+    except Exception:
+        pass
+
+    # Synthetic fallback — anchored to the real latest price if we have it
     tick_meta = fetch_company_metadata(ticker)
-    base  = tick_meta["price"] * 0.97 if tick_meta["valid"] else 100.0
-    v     = float(base)
+    if not tick_meta["valid"]:
+        return None
+    base = tick_meta["price"]
+    np.random.seed(abs(hash(ticker + tf)) % (2 ** 31))
+    n = {"1H": 60, "4H": 120, "1D": 90, "1W": 52, "1M": 24}[tf]
+    v = float(base) * 0.97
     prices = []
     for _ in range(n):
-        v += float(np.random.randn()) * 1.8 + 0.06
-        prices.append(round(max(v, 5.0), 2))
-    delta = {"1H": timedelta(minutes=1), "4H": timedelta(hours=1),
-             "1D": timedelta(days=1),   "1W": timedelta(weeks=1),
+        v += float(np.random.randn()) * (base * 0.0015) + (base * 0.0001)
+        prices.append(round(max(v, 0.01), 2))
+    delta = {"1H": timedelta(minutes=15), "4H": timedelta(hours=1),
+             "1D": timedelta(days=1),     "1W": timedelta(weeks=1),
              "1M": timedelta(days=30)}[tf]
     end   = datetime.now()
     dates = [end - delta * (n - i) for i in range(n)]
@@ -298,13 +399,21 @@ def get_price_series(ticker: str, tf: str) -> pd.DataFrame:
 def build_chart(ticker: str, tf: str) -> go.Figure:
     df = get_price_series(ticker, tf)
     fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=df["date"], y=df["price"],
-        mode="lines",
-        line=dict(color="#00d09c", width=3.5), # thick bright green
-        name=ticker,
-        showlegend=False,
-    ))
+    if df is None or df.empty:
+        fig.add_annotation(
+            text="Price data unavailable",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False,
+            font=dict(color="#555a72", size=14),
+        )
+    else:
+        fig.add_trace(go.Scatter(
+            x=df["date"], y=df["price"],
+            mode="lines",
+            line=dict(color="#00d09c", width=3.5),
+            name=ticker,
+            showlegend=False,
+        ))
     fig.update_layout(
         plot_bgcolor  = "rgba(0,0,0,0)",
         paper_bgcolor = "rgba(0,0,0,0)",
@@ -490,13 +599,15 @@ def render_home():
     gcols = st.columns(4, gap="medium")
     for idx, (ticker, fallback_name) in enumerate(GLOBAL_TICKERS):
         meta = fetch_company_metadata(ticker)
-        price  = meta["price"] if meta["valid"] else 0.0
-        name   = meta["name"]  if meta["valid"] else fallback_name
-        change = meta.get("change", 0.0)
-        chg_color = "#00e676" if change >= 0 else "#ff1744"
-        chg_sign  = "+" if change >= 0 else ""
-        chg_arrow = "&#9650;" if change >= 0 else "&#9660;"
+        price  = meta.get("price")  if meta["valid"] else None
+        name   = meta.get("name",  fallback_name)
+        change = meta.get("change") if meta["valid"] else None
+        chg_color = "#00e676" if (change or 0) >= 0 else "#ff1744"
+        chg_sign  = "+" if (change or 0) >= 0 else ""
+        chg_arrow = "&#9650;" if (change or 0) >= 0 else "&#9660;"
         cur_sym   = get_currency_symbol(ticker)
+        price_str  = f"{cur_sym}{price:,.2f}" if price is not None else "N/A"
+        change_str = f"{chg_arrow} {chg_sign}{change:.2f}%" if change is not None else "—"
 
         with gcols[idx]:
             st.markdown(f"""
@@ -520,10 +631,10 @@ def render_home():
               </div>
               <div style="font-size:26px;font-weight:800;color:#e8eaf6;
                           font-family:'JetBrains Mono',monospace;margin-bottom:6px;">
-                {cur_sym}{price:,.2f}
+                {price_str}
               </div>
               <div style="font-size:12px;font-weight:600;color:{chg_color};">
-                {chg_arrow} {chg_sign}{change:.2f}%
+                {change_str}
               </div>
             </div>
             """, unsafe_allow_html=True)
@@ -549,13 +660,15 @@ def render_home():
     cols = st.columns(4, gap="medium")
     for idx, (ticker, fallback_name) in enumerate(WATCHLIST_TICKERS):
         meta = fetch_company_metadata(ticker)
-        price  = meta["price"] if meta["valid"] else 0.0
-        name   = meta["name"]  if meta["valid"] else fallback_name
-        change = meta.get("change", 0.0)
-        chg_color = "#00e676" if change >= 0 else "#ff1744"
-        chg_sign  = "+" if change >= 0 else ""
-        chg_arrow = "&#9650;" if change >= 0 else "&#9660;"
+        price  = meta.get("price")  if meta["valid"] else None
+        name   = meta.get("name",  fallback_name)
+        change = meta.get("change") if meta["valid"] else None
+        chg_color = "#00e676" if (change or 0) >= 0 else "#ff1744"
+        chg_sign  = "+" if (change or 0) >= 0 else ""
+        chg_arrow = "&#9650;" if (change or 0) >= 0 else "&#9660;"
         cur_sym   = get_currency_symbol(ticker)
+        price_str  = f"{cur_sym}{price:,.2f}" if price is not None else "N/A"
+        change_str = f"{chg_arrow} {chg_sign}{change:.2f}%" if change is not None else "—"
 
         with cols[idx]:
             st.markdown(f"""
@@ -579,10 +692,10 @@ def render_home():
               </div>
               <div style="font-size:26px;font-weight:800;color:#e8eaf6;
                           font-family:'JetBrains Mono',monospace;margin-bottom:6px;">
-                {cur_sym}{price:,.2f}
+                {price_str}
               </div>
               <div style="font-size:12px;font-weight:600;color:{chg_color};">
-                {chg_arrow} {chg_sign}{change:.2f}%
+                {change_str}
               </div>
             </div>
             """, unsafe_allow_html=True)
@@ -738,19 +851,12 @@ def render_detail():
     # ── Fetch metadata + validate ─────────────────────────────────────
     tick = fetch_company_metadata(ticker_select)
     if not tick["valid"]:
-        try:
-            _info  = yf.Ticker(ticker_select).fast_info
-            _price = getattr(_info, "last_price", None) or getattr(_info, "regular_market_price", None)
-            if _price:
-                tick = {"valid": True, "name": ticker_select, "price": float(_price), "change": 0.0,
-                        "sentiment": 50, "sector": "N/A", "industry": "N/A", "marketCap": "N/A",
-                        "longBusinessSummary": "No summary available.", "fullTimeEmployees": "N/A"}
-            else:
-                st.error(f"❌ Ticker **{ticker_select}** was not found. Please check the symbol and try again.")
-                st.stop()
-        except Exception:
-            st.error(f"❌ Ticker **{ticker_select}** was not found. Please check the symbol and try again.")
-            st.stop()
+        st.error(
+            f"Ticker **{ticker_select}** could not be found or data is temporarily "
+            "unavailable. Please verify the symbol (e.g. RELIANCE.NS, TCS.NS for "
+            "Indian stocks) and try again."
+        )
+        st.stop()
 
     # ── ML Signals (moved to progressive load below) ─────────────
     SIGNALS = []
