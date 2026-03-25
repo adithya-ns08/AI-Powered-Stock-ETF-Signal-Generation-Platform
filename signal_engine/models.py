@@ -27,23 +27,24 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.calibration import CalibratedClassifierCV
 
 # ── XGBoost ──────────────────────────────────────────────────────
-try:
-    from xgboost import XGBClassifier
-    XGB_AVAILABLE = True
-except ImportError:
-    from sklearn.ensemble import GradientBoostingClassifier  # fallback
-    XGB_AVAILABLE = False
-    print("[models] xgboost not installed — using sklearn GradientBoosting as fallback.")
+from xgboost import XGBClassifier
+XGB_AVAILABLE = True
 
 # ── TensorFlow / Keras ───────────────────────────────────────────
-try:
-    import tensorflow as tf
-    from tensorflow import keras
-    from tensorflow.keras import layers, callbacks, regularizers
-    TF_AVAILABLE = True
-except ImportError:
-    TF_AVAILABLE = False
-    print("[models] TensorFlow not installed — LSTM model will be unavailable.")
+import os
+import logging
+import warnings
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+logging.getLogger('tensorflow').setLevel(logging.ERROR)
+warnings.filterwarnings('ignore', category=DeprecationWarning)
+warnings.filterwarnings('ignore', category=UserWarning, module='tensorflow')
+
+import tensorflow as tf
+tf.get_logger().setLevel('ERROR')
+from tensorflow import keras
+from tensorflow.keras import layers, callbacks, regularizers
+TF_AVAILABLE = True
 
 
 # ════════════════════════════════════════════════════════════════
@@ -312,7 +313,7 @@ class XGBoostSignalModel(_BaseModel):
         sw = compute_sample_weight("balanced", y_train)
         print(f"[XGBoost] Training on {len(X_train)} samples …")
 
-        if XGB_AVAILABLE and X_val is not None:
+        if X_val is not None:
             self._model.fit(
                 X_train, y_train,
                 sample_weight = sw,

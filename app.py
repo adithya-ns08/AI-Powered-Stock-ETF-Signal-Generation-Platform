@@ -16,7 +16,7 @@ st.set_page_config(
     page_title="AI-Powered Stock & ETF Signal Generation Platform",
     page_icon="⚡",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
 # ══════════════════════════════════════════════════════════════════
@@ -53,9 +53,9 @@ html, body, [class*="css"], [data-testid="stAppViewContainer"] {
 }
 
 /* ── Hide Streamlit chrome ── */
-#MainMenu, footer, header, [data-testid="stToolbar"] { visibility: hidden; height: 0; }
+#MainMenu, footer, [data-testid="stToolbar"] { visibility: hidden; height: 0; }
 [data-testid="stDecoration"] { display: none; }
-[data-testid="stSidebar"] { display: none; }
+/* [data-testid="stSidebar"] { display: none; } */
 .block-container {
   padding: 1rem 2rem 1rem 2rem !important;
   max-width: 100% !important;
@@ -203,6 +203,8 @@ for k, v in [("tf", "1D")]:
         st.session_state[k] = v
 
 
+
+
 # ══════════════════════════════════════════════════════════════════
 #  ENGINE LOADER
 # ══════════════════════════════════════════════════════════════════
@@ -211,7 +213,7 @@ from pathlib import Path
 
 @st.cache_resource
 def load_engine():
-    config = EngineConfig(use_lstm=False, use_xgboost=False)
+    config = EngineConfig(use_lstm=True, use_xgboost=True)
     engine = SignalEngine(config=config)
     models_dir = Path("models")
     if not models_dir.exists() or not any(models_dir.iterdir()):
@@ -623,8 +625,62 @@ def render_home():
     </div>
     """, unsafe_allow_html=True)
 
-    st.markdown('</div>', unsafe_allow_html=True)
+    # ── Real-Time Alert Settings ──────────────────────────────────
+    st.markdown("<br>", unsafe_allow_html=True)
+    with st.container():
+        with st.expander("⚙️ Real-Time Alert Settings", expanded=False):
+            st.markdown("<span style='color:#8890b0;font-size:13px;'>Configure external alerts for AI signals and price moves.</span>", unsafe_allow_html=True)
+            st.markdown("<br>", unsafe_allow_html=True)
 
+            col1, col2 = st.columns(2)
+            with col1:
+                st.session_state.slack_url = st.text_input(
+                    "Slack Webhook URL",
+                    value=st.session_state.get("slack_url", ""),
+                    type="password",
+                    key="home_slack_url",
+                )
+            with col2:
+                st.session_state.alert_email = st.text_input(
+                    "Target Email Address",
+                    value=st.session_state.get("alert_email", ""),
+                    key="home_alert_email",
+                )
+
+            st.session_state.price_threshold = st.slider(
+                "Price Alert Threshold (%)",
+                min_value=0.5, max_value=10.0,
+                value=st.session_state.get("price_threshold", 5.0),
+                step=0.5,
+                key="home_price_threshold",
+            )
+
+            is_active = bool(st.session_state.get("slack_url") or st.session_state.get("alert_email"))
+            status_color = "#00e676" if is_active else "#ff1744"
+            status_label = "Active" if is_active else "Inactive"
+            st.markdown(
+                f'<div style="display:flex;align-items:center;gap:8px;margin-top:10px;'
+                f'background:#13161f;padding:9px 12px;border-radius:8px;border:1px solid #252840;">'
+                f'<span style="width:9px;height:9px;border-radius:50%;background:{status_color};'
+                f'box-shadow:0 0 7px {status_color};"></span>'
+                f'<span style="color:{status_color};font-weight:600;font-size:13px;">{status_label}</span></div>',
+                unsafe_allow_html=True,
+            )
+
+            st.markdown("<hr style='margin:12px 0;border-color:#252840;'>", unsafe_allow_html=True)
+            if st.button("🔔 Send Test Alert", use_container_width=True, key="home_test_alert_btn"):
+                if is_active:
+                    from signal_engine.engine import trigger_external_alert
+                    trigger_external_alert(
+                        "TEST_TICKER", "BUY", 253.15,
+                        slack_url=st.session_state.get("slack_url") or None,
+                        email=st.session_state.get("alert_email") or None,
+                    )
+                    st.success("✅ Test notification sent!")
+                else:
+                    st.warning("Please add a Slack URL or email first.")
+
+    st.markdown('</div>', unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════
 def create_financial_chart(data_series) -> go.Figure:
@@ -1079,13 +1135,7 @@ def render_detail():
         p3.metric("Market Cap", mcap_str)
         p4.metric("Employees", tick.get("fullTimeEmployees", "N/A"))
 
-    # ══════════════════════════════════════════════════════════════
-    #  ALERTING SYSTEM
-    # ══════════════════════════════════════════════════════════════
-    from signal_engine.notifier import SlackNotifier
-    notifier = SlackNotifier()
-    notifier.process_new_signals(SIGNALS)
-
+    # Removed redundant alerting poll since engine.py now handles it.
     st.markdown('</div>', unsafe_allow_html=True)
 
 

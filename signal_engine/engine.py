@@ -116,6 +116,62 @@ def ensemble_proba(probas: list[np.ndarray],
 #  Engine
 # ════════════════════════════════════════════════════════════════
 
+def trigger_external_alert(ticker: str, signal: str, price: float,
+                           slack_url: str | None = None,
+                           email: str | None = None):
+    """
+    Sends a Real-Time Alert via Slack Webhook and/or Email (smtplib).
+
+    Parameters
+    ----------
+    ticker    : ticker symbol, e.g. 'AAPL'
+    signal    : 'BUY', 'SELL', or 'PRICE ALERT'
+    price     : current price float
+    slack_url : Slack incoming webhook URL (optional)
+    email     : target email address (optional)
+    """
+    import requests
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+
+    message = f"🚨 NEW SIGNAL: {ticker} is a {signal.upper()} at ${price:.2f}"
+
+    # ── Slack via requests ───────────────────────────────────────────
+    if slack_url:
+        try:
+            payload = {"text": message}
+            requests.post(slack_url, json=payload, timeout=5)
+            print(f"[Alert] Slack sent → {message}")
+        except Exception as e:
+            print(f"[Alert] Slack failed: {e}")
+
+    # ── Email via smtplib ────────────────────────────────────────────
+    if email:
+        try:
+            import streamlit as st
+            smtp_user   = st.secrets.get("SMTP_USER",     "")
+            smtp_pass   = st.secrets.get("SMTP_PASSWORD", "")
+            smtp_server = st.secrets.get("SMTP_SERVER",   "smtp.gmail.com")
+            smtp_port   = int(st.secrets.get("SMTP_PORT", 587))
+
+            if smtp_user and smtp_pass:
+                msg = MIMEMultipart()
+                msg["From"]    = smtp_user
+                msg["To"]      = email
+                msg["Subject"] = f"Stock Alert: {signal.upper()} — {ticker}"
+                msg.attach(MIMEText(message, "plain"))
+
+                with smtplib.SMTP(smtp_server, smtp_port) as server:
+                    server.starttls()
+                    server.login(smtp_user, smtp_pass)
+                    server.send_message(msg)
+                print(f"[Alert] Email sent → {email}")
+            else:
+                print("[Alert] Email skipped — SMTP credentials not configured in st.secrets.")
+        except Exception as e:
+            print(f"[Alert] Email failed: {e}")
+
 class SignalEngine:
     """
     Orchestrates data ingestion, model training, ensembling, and signal output.
@@ -347,6 +403,45 @@ class SignalEngine:
         # Most recent close price from dataset
         close_series = ds.get("close")
         latest_price = float(close_series.iloc[-1]) if close_series is not None and len(close_series) > 0 else 0.0
+
+        try:
+            import streamlit as st
+            threshold = st.session_state.get("price_threshold", 0.0)
+        except Exception:
+            threshold = 0.0
+
+        if close_series is not None and len(close_series) >= 2 and threshold:
+            prev_price = float(close_series.iloc[-2])
+            pct_change = ((latest_price - prev_price) / prev_price) * 100
+            
+            if not hasattr(self, "_alerted_thresh"):
+                self._alerted_thresh = set()
+            
+            thresh_key = f"{ticker}_{pct_change:.2f}"
+            if abs(pct_change) >= threshold and thresh_key not in self._alerted_thresh:
+                try:
+                    import streamlit as st
+                    _slack = st.session_state.get("slack_url")
+                    _email = st.session_state.get("alert_email")
+                except Exception:
+                    _slack = _email = None
+                trigger_external_alert(ticker, "Price Alert", latest_price, slack_url=_slack, email=_email)
+                self._alerted_thresh.add(thresh_key)
+
+        if not hasattr(self, "_last_signals"):
+            self._last_signals = {}
+            
+        old_sig = self._last_signals.get(ticker, "hold")
+        if ens_signal in ["buy", "sell"] and ens_signal != old_sig:
+            try:
+                import streamlit as st
+                _slack = st.session_state.get("slack_url")
+                _email = st.session_state.get("alert_email")
+            except Exception:
+                _slack = _email = None
+            trigger_external_alert(ticker, ens_signal.upper(), latest_price, slack_url=_slack, email=_email)
+            
+        self._last_signals[ticker] = ens_signal
 
         return {
             "id":          ticker.lower(),
