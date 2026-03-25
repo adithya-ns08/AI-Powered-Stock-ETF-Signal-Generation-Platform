@@ -2,39 +2,6 @@
 run_engine.py
 =============
 Standalone demo/test runner for the Signal Generation Engine.
-
-Run:
-    python run_engine.py
-
-This will:
-  1. Download (or synthesise) 2 years of OHLCV data for each ticker
-  2. Train Random Forest, LSTM, and XGBoost models
-  3. Print detailed evaluation reports (OOT test set)
-  4. Print a final signal summary table
-  5. Save signals to  signal_outputs/signals.json
-  6. Save evaluation summary to signal_outputs/eval_summary.csv
-  7. Export plots to signal_outputs/plots/
-
-Integration with Streamlit (app.py):
---------------------------------------
-    import json
-    from signal_engine import SignalEngine
-
-    @st.cache_resource
-    def load_engine():
-        engine = SignalEngine()
-        engine.run(["AAPL","TSLA","NVDA","SPY","MSFT"], evaluate=False)
-        return engine
-
-    engine  = load_engine()
-    SIGNALS = engine.get_signals_for_streamlit()
-    # → Drop this list straight into app.py to power Live Signals cards
-
-    # To refresh on a timer:
-    # import time
-    # if time.time() - st.session_state.get("last_refresh", 0) > 300:
-    #     engine.run(["AAPL","TSLA"], evaluate=False)
-    #     st.session_state["last_refresh"] = time.time()
 """
 
 import sys
@@ -51,7 +18,6 @@ from signal_engine.evaluator import (
     plot_confusion_matrix,
     plot_roc_curves,
     plot_feature_importance,
-    plot_training_history,
 )
 
 import matplotlib
@@ -85,9 +51,7 @@ def main():
         label_horizon      = 5,          # predict 5-day direction
         buy_threshold      = 0.012,      # +1.2% → BUY label
         sell_threshold     = -0.012,     # -1.2% → SELL label
-        lstm_lookback      = 20,
         use_rf             = True,
-        use_lstm           = True,       # set False if TF not installed
         use_xgboost        = True,
         buy_confidence_threshold  = 0.55,
         sell_confidence_threshold = 0.55,
@@ -139,14 +103,6 @@ def main():
                 report["feature_names"], report["importances"],
                 top_n=15, title=f"Feature Importance — {report['model_name']}")
             save_fig(fig, f"{safe_key}_importance.png")
-
-    # LSTM training history plots
-    for ticker, trained in engine.models_.items():
-        if "LSTM" in trained:
-            lstm = trained["LSTM"]
-            if lstm.history is not None:
-                fig = plot_training_history(lstm.history, title=f"LSTM — {ticker}")
-                save_fig(fig, f"{ticker}_lstm_history.png")
 
     elapsed = time.time() - t0
     print(f"\n⏱  Total runtime: {elapsed:.1f}s")

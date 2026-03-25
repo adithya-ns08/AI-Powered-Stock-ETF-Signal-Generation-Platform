@@ -1,19 +1,18 @@
 """
 signal_engine/models.py
 ========================
-Three model families for signal generation.
+Two model families for signal generation (TensorFlow/LSTM removed).
 
 Classes
 -------
 RandomForestSignalModel   — sklearn RandomForestClassifier on flat features
-LSTMSignalModel           — Keras/TensorFlow sequential LSTM on time-series windows
 XGBoostSignalModel        — XGBClassifier for gradient boosting on flat features
 
 Each class implements:
     .fit(X_train, y_train, X_val, y_val)
     .predict_proba(X) → np.ndarray  shape (n, 3) probabilities [sell, hold, buy]
     .predict(X)       → np.ndarray  shape (n,)   discrete labels {0, 1, 2}
-    .feature_importances_ (RF and XGBoost only)
+    .feature_importances_
 """
 
 from __future__ import annotations
@@ -23,28 +22,12 @@ import warnings
 warnings.filterwarnings("ignore")
 
 # ── Scikit-learn ─────────────────────────────────────────────────
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.calibration import CalibratedClassifierCV
 
 # ── XGBoost ──────────────────────────────────────────────────────
 from xgboost import XGBClassifier
 XGB_AVAILABLE = True
-
-# ── TensorFlow / Keras ───────────────────────────────────────────
-import os
-import logging
-import warnings
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
-logging.getLogger('tensorflow').setLevel(logging.ERROR)
-warnings.filterwarnings('ignore', category=DeprecationWarning)
-warnings.filterwarnings('ignore', category=UserWarning, module='tensorflow')
-
-import tensorflow as tf
-tf.get_logger().setLevel('ERROR')
-from tensorflow import keras
-from tensorflow.keras import layers, callbacks, regularizers
-TF_AVAILABLE = True
 
 
 # ════════════════════════════════════════════════════════════════
@@ -67,14 +50,7 @@ class RandomForestSignalModel(_BaseModel):
     """
     RandomForestClassifier with Platt scaling calibration for well-calibrated
     probability estimates.
-
-    Hyper-parameters chosen for quant finance:
-      - n_estimators = 400  (enough trees for stable OOB error)
-      - max_depth    = 12   (moderate depth prevents overfitting)
-      - class_weight = 'balanced'  (handles Buy/Hold/Sell imbalance)
-      - min_samples_leaf = 5  (smooths leaf probabilities)
     """
-
     def __init__(self,
                  n_estimators: int = 30,
                  max_depth: int = 10,
@@ -101,7 +77,6 @@ class RandomForestSignalModel(_BaseModel):
         return self
 
     def predict_proba(self, X) -> np.ndarray:
-        """Returns (n, 3) probabilities for [SELL=0, HOLD=1, BUY=2]."""
         return self._model.predict_proba(np.asarray(X, dtype=np.float32))
 
     @property
@@ -115,156 +90,13 @@ class RandomForestSignalModel(_BaseModel):
 
 
 # ════════════════════════════════════════════════════════════════
-#  2. LSTM (Keras / TensorFlow)
-# ════════════════════════════════════════════════════════════════
-
-class LSTMSignalModel(_BaseModel):
-    """
-    Stacked LSTM for multivariate time-series classification.
-
-    Architecture
-    ------------
-    Input (lookback, n_features)
-    → LSTM(128, return_sequences=True, dropout=0.2, recurrent_dropout=0.1)
-    → LSTM(64,  return_sequences=False, dropout=0.2, recurrent_dropout=0.1)
-    → Dense(64, activation='relu', kernel_regularizer=L2)
-    → Dropout(0.3)
-    → Dense(3,  activation='softmax')   ← 3-class: sell / hold / buy
-
-    Training
-    --------
-    - Adam with cosine decay learning rate
-    - Sparse categorical cross-entropy (integer labels)
-    - Early stopping on val_loss (patience=12, restore_best_weights)
-    - ReduceLROnPlateau (factor=0.5, patience=5)
-    - Class-weight balancing to avoid HOLD dominance
-    """
-
-    def __init__(self,
-                 lstm_units: tuple[int, int] = (128, 64),
-                 dense_units: int = 64,
-                 dropout: float = 0.25,
-                 learning_rate: float = 1e-3,
-                 epochs: int = 80,
-                 batch_size: int = 64,
-                 n_classes: int = 3):
-        if not TF_AVAILABLE:
-            raise RuntimeError("TensorFlow is required for LSTMSignalModel.")
-        self.lstm_units   = lstm_units
-        self.dense_units  = dense_units
-        self.dropout      = dropout
-        self.lr           = learning_rate
-        self.epochs       = epochs
-        self.batch_size   = batch_size
-        self.n_classes    = n_classes
-        self.model        = None
-        self.history      = None
-        self.is_fitted    = False
-
-    def _build(self, input_shape: tuple):
-        inp = keras.Input(shape=input_shape, name="ohlcv_sequence")
-
-        x = layers.LSTM(self.lstm_units[0],
-                        return_sequences=True,
-                        dropout=self.dropout,
-                        recurrent_dropout=0.1,
-                        kernel_regularizer=regularizers.l2(1e-4),
-                        name="lstm1")(inp)
-        x = layers.BatchNormalization()(x)
-
-        x = layers.LSTM(self.lstm_units[1],
-                        return_sequences=False,
-                        dropout=self.dropout,
-                        recurrent_dropout=0.1,
-                        kernel_regularizer=regularizers.l2(1e-4),
-                        name="lstm2")(x)
-        x = layers.BatchNormalization()(x)
-
-        x = layers.Dense(self.dense_units,
-                         activation="relu",
-                         kernel_regularizer=regularizers.l2(1e-4),
-                         name="dense1")(x)
-        x = layers.Dropout(self.dropout + 0.05, name="dropout_head")(x)
-
-        out = layers.Dense(self.n_classes, activation="softmax", name="signal_output")(x)
-
-        model = keras.Model(inputs=inp, outputs=out, name="LSTMSignalModel")
-
-        # Cosine annealing LR schedule
-        lr_schedule = keras.optimizers.schedules.CosineDecay(
-            initial_learning_rate=self.lr,
-            decay_steps=self.epochs * 10,
-        )
-        model.compile(
-            optimizer=keras.optimizers.Adam(lr_schedule),
-            loss="sparse_categorical_crossentropy",
-            metrics=["accuracy"],
-        )
-        return model
-
-    @staticmethod
-    def _class_weights(y: np.ndarray) -> dict:
-        from sklearn.utils.class_weight import compute_class_weight
-        classes = np.unique(y)
-        cw      = compute_class_weight("balanced", classes=classes, y=y)
-        return dict(zip(classes.astype(int), cw))
-
-    def fit(self, X_train, y_train, X_val=None, y_val=None):
-        if not TF_AVAILABLE:
-            raise RuntimeError("TensorFlow is required.")
-        print(f"[LSTM] Building model — input shape {X_train.shape[1:]}")
-        self.model = self._build(input_shape=X_train.shape[1:])
-
-        cbs = [
-            callbacks.EarlyStopping(monitor="val_loss", patience=12,
-                                    restore_best_weights=True, verbose=1),
-            callbacks.ReduceLROnPlateau(monitor="val_loss", factor=0.5,
-                                        patience=5, min_lr=1e-6, verbose=0),
-        ]
-
-        val_data = (X_val, y_val) if X_val is not None else None
-        cw       = self._class_weights(y_train)
-
-        self.history = self.model.fit(
-            X_train, y_train,
-            validation_data = val_data,
-            epochs          = self.epochs,
-            batch_size      = self.batch_size,
-            class_weight    = cw,
-            callbacks       = cbs,
-            verbose         = 1,
-        )
-        self.is_fitted = True
-        best_epoch = np.argmin(self.history.history.get("val_loss", [0]))
-        print(f"[LSTM] Best epoch: {best_epoch+1} | "
-              f"val_loss: {min(self.history.history.get('val_loss', [0])):.4f}")
-        return self
-
-    def predict_proba(self, X) -> np.ndarray:
-        return self.model.predict(np.asarray(X, dtype=np.float32), verbose=0)
-
-    def summary(self):
-        if self.model:
-            self.model.summary()
-
-
-# ════════════════════════════════════════════════════════════════
-#  3. XGBoost / Gradient Boosting
+#  2. XGBoost / Gradient Boosting
 # ════════════════════════════════════════════════════════════════
 
 class XGBoostSignalModel(_BaseModel):
     """
     XGBClassifier with hyper-parameters tuned for financial time-series.
-
-    Key design choices
-    ------------------
-    - num_class = 3        (multiclass softmax)
-    - use_label_encoder=False + eval_metric='mlogloss'
-    - subsample + colsample_bytree  → variance reduction (bagging-like)
-    - early_stopping_rounds via eval_set (uses validation data)
-    - scale_pos_weight is handled via sample_weight in fit()
     """
-
     def __init__(self,
                  n_estimators: int = 600,
                  max_depth: int = 6,
@@ -297,7 +129,6 @@ class XGBoostSignalModel(_BaseModel):
                 verbosity        = 0,
             )
         else:
-            # Fallback: sklearn GradientBoosting (no native multiclass softprob)
             self._model = GradientBoostingClassifier(
                 n_estimators  = min(n_estimators, 200),
                 max_depth     = max_depth,

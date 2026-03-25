@@ -213,7 +213,7 @@ from pathlib import Path
 
 @st.cache_resource
 def load_engine():
-    config = EngineConfig(use_lstm=True, use_xgboost=True)
+    config = EngineConfig(use_xgboost=True)
     engine = SignalEngine(config=config)
     models_dir = Path("models")
     if not models_dir.exists() or not any(models_dir.iterdir()):

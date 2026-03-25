@@ -259,31 +259,7 @@ def plot_feature_importance(feature_names: list[str],
     return fig
 
 
-def plot_training_history(history, title: str = "LSTM Training History") -> plt.Figure:
-    """Loss & accuracy curves from Keras history object."""
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4), facecolor=_DARK)
 
-    for ax, metric, val_metric, label, color in [
-        (ax1, "loss",     "val_loss",     "Loss",     _CRIMN),
-        (ax2, "accuracy", "val_accuracy", "Accuracy", _EMRLD),
-    ]:
-        ax.set_facecolor(_CARD)
-        epochs = range(1, len(history.history[metric]) + 1)
-        ax.plot(epochs, history.history[metric],     color=color, lw=1.8, label="Train")
-        if val_metric in history.history:
-            ax.plot(epochs, history.history[val_metric], color=color,
-                    lw=1.8, linestyle="--", alpha=0.7, label="Val")
-        ax.set_xlabel("Epoch",  color=_TEXT1, fontsize=10)
-        ax.set_ylabel(label,    color=_TEXT1, fontsize=10)
-        ax.set_title(f"{title} — {label}", color=_TEXT1, fontsize=11, fontweight="bold")
-        ax.tick_params(colors=_TEXT2)
-        ax.legend(fontsize=9, facecolor=_CARD, edgecolor=_BORD, labelcolor=_TEXT1)
-        ax.grid(True)
-        ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
-
-    fig.tight_layout()
-    return fig
 
 
 # ════════════════════════════════════════════════════════════════
