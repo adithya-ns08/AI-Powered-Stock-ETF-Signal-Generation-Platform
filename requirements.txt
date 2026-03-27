@@ -3,8 +3,10 @@ pandas
 numpy
 plotly
 scikit-learn
-yfinance>=0.2.37
+yfinance>=1.0.0
 requests
+lxml
+curl_cffi
 joblib
 xgboost
 matplotlib

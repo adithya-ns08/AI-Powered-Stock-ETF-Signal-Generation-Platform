@@ -247,98 +247,223 @@ _SIG_GSTART = {"buy": "#00897b", "sell": "#c62828", "hold": "#e65100"}
 _SIG_ICON   = {"buy": "↗", "sell": "↘", "hold": "→"}
 
 
-def _make_yf_session() -> "requests.Session":
-    """Return a requests Session with a browser User-Agent to bypass cloud IP blocks."""
-    import requests
-    s = requests.Session()
-    s.headers.update({
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/122.0.0.0 Safari/537.36"
-        )
-    })
-    return s
+@st.cache_data(ttl=3600)
+def fetch_company_profile(ticker: str) -> dict:
+    """
+    Optimised company profile fetch:
+      - fast_info and .info are fetched IN PARALLEL via ThreadPoolExecutor
+      - fast_info supplies market cap in ~0.3 s; .info supplies the rest
+      - Hard 6-second timeout on .info so a slow Yahoo response never
+        freezes the UI — fallback values are returned instead
+      - @st.cache_data(ttl=3600): only runs once per ticker per hour;
+        all subsequent re-renders are instant
+    """
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+
+    # ── helpers run in threads ────────────────────────────────────────
+    def _get_info():
+        return yf.Ticker(ticker).info or {}
+
+    def _get_fast_info():
+        fi = yf.Ticker(ticker).fast_info
+        return {
+            "market_cap":   getattr(fi, "market_cap",    None),
+            "last_price":   getattr(fi, "last_price",    None),
+            "display_name": getattr(fi, "display_name",  None),
+        }
+
+    info      = {}
+    fast_data = {"market_cap": None}
+
+    # Launch both fetches in parallel and wait up to 6 s for .info
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f_info  = pool.submit(_get_info)
+        f_fast  = pool.submit(_get_fast_info)
+
+        # fast_info is quick — collect it first (1-2 s max)
+        try:
+            fast_data = f_fast.result(timeout=4)
+        except Exception:
+            pass
+
+        # .info carries sector/industry/summary — cap at 6 s
+        try:
+            info = f_info.result(timeout=6)
+        except (FuturesTimeout, Exception):
+            info = {}
+
+    # ── safe extraction with .get() fallbacks ────────────────────────
+    long_name = info.get("longName") or info.get("shortName") or fast_data.get("display_name") or ""
+    sector    = info.get("sector",   "") or ""
+    industry  = info.get("industry", "") or ""
+    summary   = info.get("longBusinessSummary", "") or ""
+
+    # market cap: prefer .info, fall back to fast_info
+    mcap_raw  = info.get("marketCap") or fast_data.get("market_cap")
+
+    emp_raw = info.get("fullTimeEmployees")
+    emp_str = f"{int(emp_raw):,}" if emp_raw else "N/A"
+
+    return {
+        "longName":            long_name or ticker,
+        "sector":              sector    or "N/A",
+        "industry":            industry  or "N/A",
+        "longBusinessSummary": summary   or "No summary available.",
+        "marketCap":           mcap_raw,   # int/float or None
+        "fullTimeEmployees":   emp_str,
+    }
 
 
 @st.cache_data(ttl=3600)
 def fetch_company_metadata(ticker: str) -> dict:
     """
-    Fetch latest price and metadata using yf.download() which is more
-    reliable than yf.Ticker().info in cloud/server environments.
-    Falls back to yf.Ticker().fast_info as a secondary attempt.
-    Returns {"valid": False} if no data is available — never returns 0.0.
+    Fetch latest price + full metadata via yfinance.
+    Strategy:
+      1. Seed Yahoo Finance cookies → yf.Ticker(session) → stock.info
+         Metadata (sector/industry/summary/employees) extracted independently
+         from price so neither blocks the other.
+      2. Patch missing price from fast_info if .info price keys are absent.
+      3. yf.download() for price if everything above fails.
+      4. fast_info price-only last resort.
+      5. {"valid": False} — never returns 0.0
     """
     import time
     import requests
 
-    # ── Primary: yf.download for latest OHLCV ────────────────────
+    # ── Session that mimics Chrome (needed for Yahoo Finance cookies) ─
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/122.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    })
+
+    # Seed Yahoo Finance cookies so .info works properly
     try:
-        sess = _make_yf_session()
-        raw = yf.download(
-            ticker, period="5d", interval="1d",
-            progress=False, auto_adjust=True,
-            session=sess,
-        )
+        session.get("https://finance.yahoo.com", timeout=5)
+    except Exception:
+        pass
+
+    # ── Helper: format market cap ──────────────────────────────────
+    def _fmt_employees(val):
+        try:
+            return f"{int(val):,}" if val else "N/A"
+        except Exception:
+            return "N/A"
+
+    # ── Primary: stock.info — metadata & price are extracted separately
+    # so that even if price keys are absent, all profile fields are returned.
+    info = {}
+    try:
+        stock = yf.Ticker(ticker, session=session)
+        info  = stock.info or {}
+    except Exception:
+        pass
+
+    # Extract metadata fields regardless of price availability
+    sector   = info.get("sector",   None) or None
+    industry = info.get("industry", None) or None
+    summary  = info.get("longBusinessSummary", None) or None
+    mcap     = info.get("marketCap", None)
+    emp_str  = _fmt_employees(info.get("fullTimeEmployees"))
+    name     = info.get("longName") or info.get("shortName") or None
+
+    # Extract price from .info
+    price = (
+        info.get("currentPrice")
+        or info.get("regularMarketPrice")
+        or info.get("previousClose")
+    )
+
+    # If .info had metadata but no price, patch price from fast_info
+    if not price and info:
+        try:
+            fi    = yf.Ticker(ticker, session=session).fast_info
+            price = getattr(fi, "last_price", None) or getattr(fi, "regular_market_price", None)
+            if not mcap:
+                mcap = getattr(fi, "market_cap", None)
+        except Exception:
+            pass
+
+    if price and float(price) > 0:
+        prev = info.get("previousClose", price)
+        try:
+            prev_fi = getattr(yf.Ticker(ticker, session=session).fast_info, "previous_close", None)
+            if prev_fi:
+                prev = prev_fi
+        except Exception:
+            pass
+        pct = ((float(price) - float(prev)) / float(prev) * 100) if prev else 0.0
+
+        return {
+            "valid":               True,
+            "name":                name or ticker,
+            "price":               round(float(price), 2),
+            "change":              round(pct, 2),
+            "sentiment":           50,
+            "sector":              sector   or "N/A",
+            "industry":            industry or "N/A",
+            "marketCap":           mcap     or "N/A",
+            "longBusinessSummary": summary  or "No summary available.",
+            "fullTimeEmployees":   emp_str,
+        }
+
+    # ── Secondary: yf.download for price ──────────────────────────
+    time.sleep(0.25)
+    try:
+        raw = yf.download(ticker, period="5d", interval="1d",
+                          progress=False, auto_adjust=True)
         if raw is not None and not raw.empty:
-            # Flatten MultiIndex columns if present
             raw.columns = [c[0] if isinstance(c, tuple) else c for c in raw.columns]
             close_col = next((c for c in raw.columns if c.lower() == "close"), None)
             if close_col and len(raw) >= 1:
                 latest_close = float(raw[close_col].iloc[-1])
                 prev_close   = float(raw[close_col].iloc[-2]) if len(raw) >= 2 else latest_close
                 pct_change   = ((latest_close - prev_close) / prev_close * 100) if prev_close else 0.0
-
-                # Try to get a display name via Ticker (non-blocking fallback)
-                name = ticker
-                sector = "N/A"
-                industry = "N/A"
-                market_cap = "N/A"
-                summary = "No summary available."
-                employees = "N/A"
                 try:
-                    t = yf.Ticker(ticker, session=sess)
-                    info = t.fast_info
-                    name = getattr(info, "display_name", None) or ticker
+                    fi_name = getattr(yf.Ticker(ticker, session=session).fast_info, "display_name", None)
                 except Exception:
-                    pass
-
+                    fi_name = None
+                # If we managed to get metadata from .info above, use it
                 return {
-                    "valid": True,
-                    "name": name,
-                    "price": round(latest_close, 2),
-                    "change": round(pct_change, 2),
-                    "sentiment": 50,
-                    "sector": sector,
-                    "industry": industry,
-                    "marketCap": market_cap,
-                    "longBusinessSummary": summary,
-                    "fullTimeEmployees": employees,
+                    "valid":               True,
+                    "name":                name or fi_name or ticker,
+                    "price":               round(latest_close, 2),
+                    "change":              round(pct_change, 2),
+                    "sentiment":           50,
+                    "sector":              sector   or "N/A",
+                    "industry":            industry or "N/A",
+                    "marketCap":           mcap     or "N/A",
+                    "longBusinessSummary": summary  or "No summary available.",
+                    "fullTimeEmployees":   emp_str,
                 }
     except Exception:
         pass
 
-    # ── Secondary: fast_info fallback ────────────────────────────
-    time.sleep(0.3)  # small delay to avoid rate-limiting
+    # ── Tertiary: fast_info price-only ────────────────────────────
+    time.sleep(0.25)
     try:
-        sess = _make_yf_session()
-        t = yf.Ticker(ticker, session=sess)
-        fi = t.fast_info
+        fi    = yf.Ticker(ticker, session=session).fast_info
         price = getattr(fi, "last_price", None) or getattr(fi, "regular_market_price", None)
         if price and float(price) > 0:
             prev = getattr(fi, "previous_close", price)
             pct  = ((float(price) - float(prev)) / float(prev) * 100) if prev else 0.0
             return {
-                "valid": True,
-                "name": ticker,
-                "price": round(float(price), 2),
-                "change": round(pct, 2),
-                "sentiment": 50,
-                "sector": "N/A",
-                "industry": "N/A",
-                "marketCap": "N/A",
-                "longBusinessSummary": "No summary available.",
-                "fullTimeEmployees": "N/A",
+                "valid":               True,
+                "name":                ticker,
+                "price":               round(float(price), 2),
+                "change":              round(pct, 2),
+                "sentiment":           50,
+                "sector":              sector   or "N/A",
+                "industry":            industry or "N/A",
+                "marketCap":           mcap     or "N/A",
+                "longBusinessSummary": summary  or "No summary available.",
+                "fullTimeEmployees":   emp_str,
             }
     except Exception:
         pass
@@ -350,22 +475,19 @@ def fetch_company_metadata(ticker: str) -> dict:
 def get_price_series(ticker: str, tf: str) -> pd.DataFrame | None:
     """
     Fetch real OHLCV data from yfinance for the chosen timeframe.
-    Falls back to synthetic data if cloud fetch fails.
-    Returns None only when ticker is completely invalid.
+    Falls back to synthetic data anchored to the real price if fetch fails.
+    Returns None only if the ticker is completely invalid.
     """
-    import requests as _requests
     period_map   = {"1H": "5d",  "4H": "60d", "1D": "6mo", "1W": "2y",  "1M": "5y"}
     interval_map = {"1H": "15m", "4H": "1h",  "1D": "1d",  "1W": "1wk", "1M": "1mo"}
 
     try:
-        sess = _make_yf_session()
         raw = yf.download(
             ticker,
-            period   = period_map[tf],
-            interval = interval_map[tf],
-            progress = False,
+            period      = period_map[tf],
+            interval    = interval_map[tf],
+            progress    = False,
             auto_adjust = True,
-            session  = sess,
         )
         if raw is not None and not raw.empty:
             raw.columns = [c[0] if isinstance(c, tuple) else c for c in raw.columns]
@@ -376,7 +498,7 @@ def get_price_series(ticker: str, tf: str) -> pd.DataFrame | None:
     except Exception:
         pass
 
-    # Synthetic fallback — anchored to the real latest price if we have it
+    # Synthetic fallback — anchored to real latest price
     tick_meta = fetch_company_metadata(ticker)
     if not tick_meta["valid"]:
         return None
@@ -738,60 +860,68 @@ def render_home():
     </div>
     """, unsafe_allow_html=True)
 
-    # ── Real-Time Alert Settings ──────────────────────────────────
+    # ── AI Alert System (Redesigned for Demo) ──────────────────────
     st.markdown("<br>", unsafe_allow_html=True)
     with st.container():
-        with st.expander("⚙️ Real-Time Alert Settings", expanded=False):
-            st.markdown("<span style='color:#8890b0;font-size:13px;'>Configure external alerts for AI signals and price moves.</span>", unsafe_allow_html=True)
-            st.markdown("<br>", unsafe_allow_html=True)
-
-            col1, col2 = st.columns(2)
-            with col1:
-                st.session_state.slack_url = st.text_input(
-                    "Slack Webhook URL",
-                    value=st.session_state.get("slack_url", ""),
-                    type="password",
-                    key="home_slack_url",
-                )
-            with col2:
-                st.session_state.alert_email = st.text_input(
-                    "Target Email Address",
-                    value=st.session_state.get("alert_email", ""),
-                    key="home_alert_email",
-                )
-
-            st.session_state.price_threshold = st.slider(
-                "Price Alert Threshold (%)",
-                min_value=0.5, max_value=10.0,
-                value=st.session_state.get("price_threshold", 5.0),
-                step=0.5,
-                key="home_price_threshold",
-            )
-
-            is_active = bool(st.session_state.get("slack_url") or st.session_state.get("alert_email"))
-            status_color = "#00e676" if is_active else "#ff1744"
-            status_label = "Active" if is_active else "Inactive"
+        with st.expander("⚙️ AI Alert System", expanded=True):
             st.markdown(
-                f'<div style="display:flex;align-items:center;gap:8px;margin-top:10px;'
-                f'background:#13161f;padding:9px 12px;border-radius:8px;border:1px solid #252840;">'
-                f'<span style="width:9px;height:9px;border-radius:50%;background:{status_color};'
-                f'box-shadow:0 0 7px {status_color};"></span>'
-                f'<span style="color:{status_color};font-weight:600;font-size:13px;">{status_label}</span></div>',
-                unsafe_allow_html=True,
+                "<div style='color:#8890b0; font-size:14px; margin-bottom:15px;'>"
+                "Trigger real-time AI-generated alerts based on current market leaders across global and Indian markets."
+                "</div>", 
+                unsafe_allow_html=True
+            )
+            
+            # Status Badge
+            st.markdown(
+                '<div style="display:inline-flex; align-items:center; gap:8px; '
+                'background:rgba(0,230,118,0.08); padding:6px 14px; border-radius:30px; '
+                'border:1px solid rgba(0,230,118,0.25); margin-bottom:20px;">'
+                '<span style="width:8px; height:8px; border-radius:50%; background:#00e676; '
+                'box-shadow:0 0 8px #00e676;"></span>'
+                '<span style="color:#00e676; font-weight:700; font-size:12px; text-transform:uppercase; letter-spacing:0.05em;">'
+                'Terminal Mode Active</span></div>',
+                unsafe_allow_html=True
             )
 
-            st.markdown("<hr style='margin:12px 0;border-color:#252840;'>", unsafe_allow_html=True)
-            if st.button("🔔 Send Test Alert", use_container_width=True, key="home_test_alert_btn"):
-                if is_active:
-                    from signal_engine.engine import trigger_external_alert
-                    trigger_external_alert(
-                        "TEST_TICKER", "BUY", 253.15,
-                        slack_url=st.session_state.get("slack_url") or None,
-                        email=st.session_state.get("alert_email") or None,
-                    )
-                    st.success("✅ Test notification sent!")
-                else:
-                    st.warning("Please add a Slack URL or email first.")
+            # Market Labels
+            mcol1, mcol2 = st.columns(2)
+            with mcol1:
+                st.markdown(
+                    "<div style='background:#13161f; padding:10px 15px; border-radius:8px; border:1px solid #252840;'>"
+                    "<div style='font-size:10px; color:#555a72; text-transform:uppercase;'>Global Equities</div>"
+                    "<div style='font-size:13px; color:#e8eaf6; font-weight:600;'>US Tech (NASDAQ)</div>"
+                    "</div>", unsafe_allow_html=True
+                )
+            with mcol2:
+                st.markdown(
+                    "<div style='background:#13161f; padding:10px 15px; border-radius:8px; border:1px solid #252840;'>"
+                    "<div style='font-size:10px; color:#555a72; text-transform:uppercase;'>Domestic Market</div>"
+                    "<div style='font-size:13px; color:#e8eaf6; font-weight:600;'>Indian Leaders (NSE)</div>"
+                    "</div>", unsafe_allow_html=True
+                )
+
+            st.markdown("<div style='margin:20px 0;'></div>", unsafe_allow_html=True)
+            
+            # Action Button
+            if st.button("🔔 Send Live Alerts", use_container_width=True, key="home_live_alert_btn"):
+                from signal_engine.notifier import AlertManager
+                # Initialize with current session values if any
+                notifier = AlertManager(
+                    webhook_url=st.session_state.get("slack_url") or None,
+                    email_address=st.session_state.get("alert_email") or None
+                )
+                notifier.test_notification()
+                st.toast("Generating live market alerts in terminal...", icon="🔔")
+
+            st.markdown(
+                "<div style='background:rgba(41,121,255,0.08); padding:12px 16px; border-radius:10px; "
+                "border:1px solid rgba(41,121,255,0.2); margin-top:15px;'>"
+                "<div style='font-size:12px; color:#2979ff; display:flex; align-items:center; gap:8px;'>"
+                "<span>ℹ️</span> <span>This triggers AI signals across US and Indian markets "
+                "and displays them in the terminal for real-time analysis.</span>"
+                "</div></div>", 
+                unsafe_allow_html=True
+            )
 
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -1210,36 +1340,46 @@ def render_detail():
     # ══════════════════════════════════════════════════════════════
     st.markdown("<br>", unsafe_allow_html=True)
     with st.expander("Company Profile", expanded=False):
-        st.markdown(
-            f'<div style="color:#e8eaf6; font-size:18px; font-weight:700; margin-bottom:10px;">'
-            f'{tick.get("name", ticker_select)}</div>',
-            unsafe_allow_html=True
-        )
-        st.markdown(
-            f'<div style="color:#8890b0; font-size:13px; line-height:1.6;">'
-            f'{tick.get("longBusinessSummary", "No summary available.")}</div>',
-            unsafe_allow_html=True
-        )
-        st.markdown("<hr style='margin: 15px 0; border-color: #252840;'>", unsafe_allow_html=True)
+        # Spinner only shows on first load per ticker; subsequent renders
+        # are instant because @st.cache_data caches results for 1 hour.
+        with st.spinner("Loading company profile..."):
+            profile = fetch_company_profile(ticker_select)
 
-        mcap = tick.get("marketCap", "N/A")
-        if isinstance(mcap, (int, float)):
+        company_name = profile.get("longName")            or tick.get("name", ticker_select)
+        sector       = profile.get("sector",   "N/A")
+        industry     = profile.get("industry", "N/A")
+        employees    = profile.get("fullTimeEmployees",  "N/A")
+        bio          = profile.get("longBusinessSummary", "No summary available.")
+        mcap         = profile.get("marketCap")  # int or None
+
+        # Format market cap as readable currency string
+        cur_sym = get_currency_symbol(ticker_select)
+        if isinstance(mcap, (int, float)) and mcap:
             if mcap >= 1e12:
-                mcap_str = f"₹{mcap/1e12:.2f}T"
+                market_cap = f"{cur_sym}{mcap/1e12:.2f}T"
             elif mcap >= 1e9:
-                mcap_str = f"₹{mcap/1e9:.2f}B"
+                market_cap = f"{cur_sym}{mcap/1e9:.2f}B"
             elif mcap >= 1e6:
-                mcap_str = f"₹{mcap/1e6:.2f}M"
+                market_cap = f"{cur_sym}{mcap/1e6:.2f}M"
             else:
-                mcap_str = f"₹{mcap:,.0f}"
+                market_cap = f"{cur_sym}{mcap:,.0f}"
         else:
-            mcap_str = str(mcap)
+            market_cap = "N/A"
 
-        p1, p2, p3, p4 = st.columns(4)
-        p1.metric("Sector",    tick.get("sector", "N/A"))
-        p2.metric("Industry",  tick.get("industry", "N/A"))
-        p3.metric("Market Cap", mcap_str)
-        p4.metric("Employees", tick.get("fullTimeEmployees", "N/A"))
+        # Business summary
+        st.markdown(
+            f'<div style="color:#8890b0; font-size:13px; line-height:1.7; '
+            f'margin-bottom:16px;">{bio}</div>',
+            unsafe_allow_html=True,
+        )
+
+        # ── 5 metric cards ───────────────────────────────────────────
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Company Name", company_name)
+        c2.metric("Sector",       sector)
+        c3.metric("Industry",     industry)
+        c4.metric("Market Cap",   market_cap)
+        c5.metric("Employees",    employees)
 
     # Removed redundant alerting poll since engine.py now handles it.
     st.markdown('</div>', unsafe_allow_html=True)
